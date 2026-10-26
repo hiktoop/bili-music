@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# bili —— 从哔哩哔哩取音频（yt-dlp + ffmpeg 的薄包装）
+#
+#   bili <链接或BV号> [更多链接...]     下载最高音质，存成 .m4a（不转码）
+#   bili -m <链接>                      转成 mp3（老播放器/车机用）
+#   bili -s <链接>                      不存盘，直接开始听（ffplay）
+#   bili -p <链接>                      只看有哪些音频轨，不下载
+#   bili -c chrome <链接>               带上浏览器里的 B 站登录 Cookie（大会员/Hi-Res 才需要）
+#   bili -n <链接>                      只下当前这一 P（默认会把整个合集都下）
+#   bili -a list.txt                    从文本文件里逐行读链接
+#   bili --m3u 学习.m3u <链接...>       下完顺便生成播放列表
+#
+# 文件默认放在 ~/Music/Bilibili/<UP主>/ 下，封面和标签都会写进文件里。
+# 重复下载会自动跳过（记录在 <输出目录>/.downloaded.txt），加 -f 可强制重下。
+
+set -uo pipefail
+
+YTDLP="${YTDLP:-$(command -v yt-dlp || echo "$HOME/.local/bin/yt-dlp")}"
+OUT="$HOME/Music/Bilibili"
+FMT="m4a"          # m4a | mp3 | flac
+COOKIES=""
+PLAYLIST=1
+FORCE=0
+LIST_ONLY=0
+STREAM=0
+M3U=""
+INPUTS=()
+
+die() { printf '出错了：%s\n' "$*" >&2; exit 1; }
+usage() {
+  awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)    usage ;;
+    -m|--mp3)     FMT="mp3"; shift ;;
+    --flac)       FMT="flac"; shift ;;
+    -d|--dir)     OUT="${2:?-d 后面要跟目录}"; shift 2 ;;
+    -c|--cookies) COOKIES="${2:?-c 后面要跟浏览器名，如 chrome / firefox / edge}"; shift 2 ;;
+    -n|--no-playlist) PLAYLIST=0; shift ;;
+    -f|--force)   FORCE=1; shift ;;
+    -p|--formats) LIST_ONLY=1; shift ;;
+    -s|--stream)  STREAM=1; shift ;;
+    --m3u)        M3U="${2:?--m3u 后面要跟文件名}"; shift 2 ;;
+    -a|--file)    [ -r "${2:?-a 后面要跟文件}" ] || die "读不到 ${2}"; \
+                  while IFS= read -r l; do [ -n "${l// }" ] && INPUTS+=("$l"); done < "$2"; shift 2 ;;
+    --)           shift; while [ $# -gt 0 ]; do INPUTS+=("$1"); shift; done ;;
+    -*)           die "没见过的选项：$1（-h 看用法）" ;;
+    *)            INPUTS+=("$1"); shift ;;
+  esac
+done
+
+[ -x "$YTDLP" ] || die "找不到 yt-dlp：$YTDLP"
+command -v ffmpeg >/dev/null || die "找不到 ffmpeg"
+[ ${#INPUTS[@]} -gt 0 ] || usage
+
+# 允许只写 BV 号 / av 号 / 带 ?p= 的分享链接
+norm() {
+  case "$1" in
+    BV[0-9A-Za-z]*)  printf 'https://www.bilibili.com/video/%s/' "$1" ;;
+    av[0-9]*)        printf 'https://www.bilibili.com/video/%s/' "$1" ;;
+    *bilibili.com*|*b23.tv*|*bili2233.cn*) printf '%s' "$1" ;;
+    *) die "认不出这个链接：$1" ;;
+  esac
+}
+
+COMMON=( --no-warnings --newline --retries 5 --fragment-retries 5 )
+[ -n "$COOKIES" ] && COMMON+=( --cookies-from-browser "$COOKIES" )
+[ "$PLAYLIST" -eq 0 ] && COMMON+=( --no-playlist )
+
+# 代理偶尔会掐 TLS 连接：真连不上时绕开代理再试一次
+run_ytdlp() {
+  "$YTDLP" "$@" && return 0
+  printf '… 连接不稳，绕过系统代理重试一次\n' >&2
+  env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY \
+      -u https_proxy -u http_proxy -u all_proxy \
+      "$YTDLP" "$@" && return 0
+  printf '… 再试一次，慢一点但不走代理\n' >&2
+  env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY \
+      -u https_proxy -u http_proxy -u all_proxy \
+      "$YTDLP" --sleep-requests 1 "$@"
+}
+
+if [ "$LIST_ONLY" -eq 1 ]; then
+  for u in "${INPUTS[@]}"; do
+    printf '\n== %s ==\n' "$u"
+    run_ytdlp "${COMMON[@]}" -F "$(norm "$u")" | grep -Ei 'audio only|^ID|^-{5,}'
+  done
+  exit 0
+fi
+
+if [ "$STREAM" -eq 1 ]; then
+  command -v ffplay >/dev/null || die "找不到 ffplay（装 ffmpeg 就有了）"
+  for u in "${INPUTS[@]}"; do
+    printf '\n▶ 正在解析 %s …\n' "$u"
+    url="$(run_ytdlp "${COMMON[@]}" -f bestaudio --get-url "$(norm "$u")" 2>/dev/null | head -1)"
+    [ -n "$url" ] || { printf '✗ 拿不到音频地址：%s\n' "$u" >&2; continue; }
+    title="$(run_ytdlp "${COMMON[@]}" --print '%(uploader)s - %(title)s' --skip-download "$(norm "$u")" 2>/dev/null | head -1)"
+    printf '♪ %s\n   （ffplay 窗口里按 q 退出，按空格暂停）\n' "${title:-$u}"
+    ffplay -nodisp -autoexit -loglevel warning -window_title "B站音频" "$url"
+  done
+  exit 0
+fi
+
+mkdir -p "$OUT" || die "建不了目录 $OUT"
+ARCHIVE="$OUT/.downloaded.txt"
+TMPLIST=""
+[ -n "$M3U" ] && TMPLIST="$(mktemp)"
+
+ARGS=( "${COMMON[@]}"
+       -f bestaudio/best -R 5
+       --extract-audio
+       --embed-thumbnail --convert-thumbnails jpg
+       --embed-metadata
+       --parse-metadata '%(uploader,creator,channel|Bilibili)s:%(meta_artist)s'
+       --parse-metadata '%(uploader,creator,channel|Bilibili)s:%(meta_album_artist)s'
+       --output "$OUT/%(uploader,creator,channel|unknown)s/%(uploader,creator,channel|unknown)s - %(title).120B [%(id)s].%(ext)s"
+       --no-mtime )
+
+case "$FMT" in
+  m4a)  ARGS+=( --audio-format m4a --audio-quality 0 ) ;;   # 原样封装，不重新编码
+  mp3)  ARGS+=( --audio-format mp3 --audio-quality 0 ) ;;
+  flac) ARGS+=( --audio-format flac ) ;;
+esac
+
+[ "$FORCE" -eq 0 ] && ARGS+=( --download-archive "$ARCHIVE" )
+[ -n "$TMPLIST" ] && ARGS+=( --print-to-file after_move:filepath "$TMPLIST" )
+
+fail=0
+for u in "${INPUTS[@]}"; do
+  url="$(norm "$u")" || { fail=1; continue; }
+  printf '\n▶ %s\n' "$url"
+  run_ytdlp "${ARGS[@]}" "$url" || { printf '✗ 这个没成功：%s\n' "$url" >&2; fail=1; }
+done
+
+if [ -n "$M3U" ] && [ -s "$TMPLIST" ]; then
+  { echo "#EXTM3U"
+    while IFS= read -r f; do
+      [ -f "$f" ] || continue
+      t="$(basename "$f")"; t="${t%.*}"
+      s=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null | cut -d. -f1)
+      [ -n "$s" ] && echo "#EXTINF:${s},${t}"
+      echo "$f"
+    done < "$TMPLIST"
+  } > "$M3U"
+  printf '\n播放列表：%s（%s 首）\n' "$M3U" "$(grep -c '^/' "$M3U")"
+fi
+[ -n "$TMPLIST" ] && rm -f "$TMPLIST"
+
+printf '\n完成，文件在：%s\n' "$OUT"
+exit "$fail"

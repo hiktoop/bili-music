@@ -1,82 +1,157 @@
 # bili♪ 音乐库
 
-把自己在 B 站听的音频变成本地音乐库：粘链接进来，后台用 yt-dlp 抓最高音质的音频流，
-存到本地，然后用一个网页播放器来听——收藏、歌单、缓存、队列都在里面，不用再开 B 站。
+把自己在 B 站听的音频，变成本地音乐库。
+
+粘一个链接进来，后台用 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 只抓音频流、存到本地，
+然后用一个网页播放器来听——歌单、收藏、缓存、续播、深浅主题都在里面，不用再开着 B 站。
 
 ```
-浏览器 ──► FastAPI (本机 8788) ──► SQLite（曲目/歌单/收藏/历史）
+浏览器 ──► FastAPI (127.0.0.1:8788) ──► SQLite（曲目 / 歌单 / 收藏 / 历史 / 设置）
                     │
                     └──► yt-dlp + ffmpeg ──► ~/.local/share/bili-music/media/*.m4a
 ```
 
-## 启动
+## 特性
+
+- **只取音频轨**，m4a 原样保存不转码，音质等于源的上限，体积也最小
+- **缓存优先**：点一首没下过的，自动排队下载并显示进度，下完立刻播；之后切歌、拖进度都是零延迟
+- **自动预缓存下一首**，连着听的时候只会等第一次
+- **续播**：每 2 秒记一次进度，关掉页面/重启电脑再打开，队列和「上次听到 25:00」都还在
+- 歌单、收藏、播放历史、搜索过滤、播放队列
+- 分 P 视频可以只加当前这 P，也能一次把整个合集加进来
+- 封面、标题、UP 主都写进文件标签，拷到手机/车机也不丢
+- 深色 / 浅色主题，跟随系统，也可以手动切
+- 纯静态前端，无框架、无构建、无 Node
+- 浏览器原生播放器：Range 流式、键盘快捷键、系统媒体键（Media Session）
+
+## 快速开始
 
 ```bash
-biliweb                 # 启动并打开浏览器
-NOOPEN=1 biliweb        # 只启动
-PORT=9000 biliweb       # 换端口
+git clone https://github.com/hiktoop/bili-music.git
+cd bili-music
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python3 app.py
 ```
 
-已经装了 systemd 用户服务，开机（登录）后自动跑：
+打开 <http://127.0.0.1:8788>，在顶部输入框粘一个 B 站链接，回车。
+
+## 从零安装
+
+### 0. 需要什么
+
+| 依赖 | 版本 | 干什么用 |
+|---|---|---|
+| Python | 3.10+ | 跑服务 |
+| ffmpeg | 4.2+（建议 6+） | 抽音频、转封面、写标签 |
+| yt-dlp | 随 pip 装 | 解析 B 站、下载音频流 |
+
+### 1. 装系统依赖
 
 ```bash
-systemctl --user status biliweb     # 看状态
-systemctl --user restart biliweb    # 改完代码后重启
-systemctl --user disable --now biliweb   # 不要它自启
-journalctl --user -u biliweb -f     # 看日志
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip ffmpeg git
+
+# Fedora
+sudo dnf install -y python3 python3-pip ffmpeg git
+
+# Arch
+sudo pacman -S --needed python python-pip ffmpeg git
+
+# macOS（需要先装 Homebrew）
+brew install python ffmpeg git
 ```
 
-地址：<http://127.0.0.1:8788>
+Windows 没实测过（代码里只有 pathlib 和 ffmpeg 调用，理论可行），需要把 ffmpeg 放进 `PATH`。
 
-## 能做什么
+### 2. 拿代码
 
-| 页面 | 作用 |
-|---|---|
-| 音乐库 | 全部曲目，带「本地 / 未缓存 / 缓存中」状态；最近播放横向卡片；搜索框按歌名或 UP 主过滤 |
-| 收藏 | ♡ 过的曲子，可一键播放全部 |
-| 缓存 | 本地占用、已缓存 / 未缓存数量；「全部缓存」「清空音频文件」（只删文件，元数据留） |
-| 歌单 | 新建、重命名、删除；任意曲目点「＋」加入歌单 |
-| 设置 | 缓存音质、Cookie 浏览器、点开自动缓存、预缓存下一首 |
-| 主题 | 右上角一键切换深色 / 浅色，选择记在浏览器里，首次打开跟随系统 |
-| 播放器（底部常驻） | 播放/暂停、上一首/下一首、随机、单曲/列表循环、进度拖动、音量、队列抽屉、收藏 |
+```bash
+git clone https://github.com/hiktoop/bili-music.git
+cd bili-music
+```
 
-**播放流程**：点一首没缓存过的歌 → 自动排队下载 → 播放器上显示「缓存中 42%」→ 下完立刻开始播。
-因为走的是本地文件，之后切歌、拖进度都是零延迟。
+### 3. 装 Python 包
 
-**续播**：播放位置每 2 秒记一次（存在浏览器里），关掉页面、重启电脑再打开，
-队列和「上次听到 25:00」都还在，按播放键就从那儿接着放。
-想从头听，点播放器左边的时间数字（有悬停提示），或者把进度条拖回开头。
+推荐用虚拟环境，不污染系统 Python：
 
-快捷键：`空格` 播放/暂停，`N` 下一首，`P` 上一首，`Shift+←/→` 快退/快进 10 秒。
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-## 添加音频
+不想用 venv 也可以装到用户目录：
 
-页面顶部那条输入框就是添加入口（不弹窗、不遮页面），粘任意一种，回车：
+```bash
+pip install --user -r requirements.txt
+# Ubuntu 24.04 的 PEP 668 会拦，加 --break-system-packages
+```
+
+### 4. 启动
+
+```bash
+python3 app.py                     # → http://127.0.0.1:8788
+PORT=9000 python3 app.py           # 换端口
+```
+
+服务只监听 `127.0.0.1`，不对外网开放。
+
+### 5. 开机自启（可选）
+
+仓库里带了 systemd 用户服务模板 `contrib/biliweb.service`：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/biliweb.service ~/.config/systemd/user/
+# 如果代码不在 ~/bili-music，改里面的 WorkingDirectory 和 ExecStart
+systemctl --user daemon-reload
+systemctl --user enable --now biliweb
+
+systemctl --user status biliweb
+journalctl --user -u biliweb -f      # 看日志
+systemctl --user disable --now biliweb
+```
+
+macOS 用 launchd 或者 `brew services`，自行套一下。
+
+## 怎么用
+
+### 添加
+
+页面顶部那条输入框就是入口（不是弹窗），粘任意一种，回车：
 
 - `https://www.bilibili.com/video/BV1m2pTzCEXc/`（后面带 `?spm_id_from=…` 之类的也认）
 - `BV1m2pTzCEXc`
 - `https://b23.tv/xxxxxxx`（短链会先跟一次跳转）
-- 分 P 视频会问「只加当前这 P」还是「整个合集 N 首」（直接在那条预览里选）
+- 分 P 视频会问「只加当前这 P」还是「整个合集 N 首」
 
-添加后会自动排队缓存，不用再点一次。整个流程只有：粘贴 → 回车 → 选分 P → 加入库。
+添加后自动排队缓存，不用再点一次。流程就是：粘贴 → 回车 → 选分 P → 加入库。
 
-## 数据在哪
+### 播放
 
-```
-~/.local/share/bili-music/
-├── library.db          曲目、歌单、收藏、播放历史、设置（SQLite）
-├── media/<id>.m4a      音频，文件名就是 BV 号，跟标题无关（改标题不会乱）
-└── covers/<id>.jpg     封面，统一转成 jpg，离线也有图
-```
+底部常驻播放器：播放/暂停、上一首/下一首、随机、单曲/列表循环、进度拖动、音量、队列抽屉。
 
-标题、UP 主、封面都写进了文件的标签里（m4a 用 MP4 tag，mp3 用 ID3），
-所以把这些文件拷到手机 / 车机 / 别的播放器，信息也不会丢。
+| 快捷键 | 作用 |
+|---|---|
+| `空格` | 播放 / 暂停 |
+| `N` / `P` | 下一首 / 上一首 |
+| `Shift + ←/→` | 快退 / 快进 10 秒 |
+| 点进度左边的数字 | 从头播放 |
 
-想换位置：`BILI_MUSIC_HOME=/path/to/dir biliweb`（数据库和媒体文件一起搬）。
+系统媒体键（耳机上的播放/暂停键）也能用。
 
-## 音质说明
+### 为什么是缓存，而不是每次在线解析
 
-B 站对未登录用户最高只给 `30280`（约 100 kbps AAC）。这是源的上限，不是工具的毛病。
+B 站的播放地址大约 2 小时过期，CDN 会限速，断网就直接没法放；而音乐是重复消费的东西，
+同一首你第二遍听的概率接近 100%。所以这里的策略是「点播即缓存」：第一次等几秒（本地通常 2–5 秒），
+之后永远从磁盘读，切歌零延迟、离线可听、随便拖进度。一首 50 分钟的音频约 36 MB。
+
+在线解析只作为「没缓存时的填充动作」存在，不是主路径。
+
+## 音质
+
+B 站对未登录用户最高只给 `30280`（约 100 kbps AAC），这是源的上限，不是工具的问题。
 
 | 情况 | 能拿到 |
 |---|---|
@@ -87,76 +162,126 @@ B 站对未登录用户最高只给 `30280`（约 100 kbps AAC）。这是源的
 要拿第三种：设置里「登录状态」选你平时登录 B 站的浏览器（chrome / firefox / edge…），
 音质选 `flac`。普通曲子这样选没有提升，只是白占空间。
 
+第一次读浏览器 Cookie 要几十秒，之后会导出成 `~/.local/share/bili-music/cookies.txt`
+（6 小时更新一次），后续请求都走文件；读不出来会自动丢掉 Cookie 重试，不会卡住。
+
+## 数据在哪
+
+```
+~/.local/share/bili-music/
+├── library.db          曲目、歌单、收藏、播放历史、设置（SQLite）
+├── media/<id>.m4a      音频，文件名就是 BV 号
+├── covers/<id>.jpg     封面，统一转 jpg，离线也有图
+└── cookies.txt         浏览器 Cookie（600 权限，只在设置里选了浏览器时才有）
+```
+
+- 备份：整个目录拷走就行
+- 换位置：`BILI_MUSIC_HOME=/path/to/dir python3 app.py`
+- 文件里带标题/UP 主/封面标签，直接拷进手机音乐 App 也能正常显示
+
+## 配置
+
+| 位置 | 项 | 说明 |
+|---|---|---|
+| 设置页 | 缓存音质 | `m4a`（原始，推荐）/ `mp3`（老播放器）/ `flac` |
+| 设置页 | 登录状态 | 不用 / chrome / firefox / edge… |
+| 设置页 | 点开就自动缓存 | 关掉的话，没缓存的歌点了会提示先缓存 |
+| 设置页 | 预缓存下一首 | 当前这首开始播时顺手把队列下一首下好 |
+| 环境变量 | `PORT` | 端口，默认 8788 |
+| 环境变量 | `BILI_MUSIC_HOME` | 数据目录 |
+
 ## 命令行版
 
-同时留了一个下歌到 `~/Music/Bilibili/` 的命令行工具（跟网页版互不干扰）：
+`contrib/bili` 是个独立的 shell 脚本，把音频下到 `~/Music/Bilibili/`，不依赖上面那个服务：
 
 ```bash
-bili BV1m2pTzCEXc            # 下载成 m4a
-bili -s <链接>                # 不存盘，直接 ffplay 听
-bili -a list.txt --m3u 学习.m3u   # 批量下 + 生成播放列表
+cp contrib/bili ~/.local/bin/ && chmod +x ~/.local/bin/bili
+
+bili BV1m2pTzCEXc                 # 下载成 m4a
+bili -m <链接>                     # 转 mp3
+bili -s <链接>                     # 不存盘，直接 ffplay 听
+bili -p <链接>                     # 看看有哪几档音频
+bili -n <链接>                     # 只下当前这 P
+bili -a list.txt --m3u 学习.m3u    # 批量下 + 生成播放列表
+bili -h
 ```
 
-`bili -h` 看全部选项。
-
-## 目录结构
+## 文件结构
 
 ```
-~/bili-music/
-├── app.py          FastAPI 路由：库、解析、导入、缓存、收藏、歌单、流媒体（支持 Range）
-├── catalog.py      SQLite + yt-dlp 下载队列 + 标签写入
+bili-music/
+├── app.py                  FastAPI 路由：库、解析、导入、缓存、收藏、歌单、流媒体（Range）
+├── catalog.py              SQLite + yt-dlp 下载队列 + 标签写入 + Cookie 缓存
 ├── static/
-│   ├── index.html  单页骨架
-│   ├── style.css   主题（B 站粉 #fb7299）
-│   └── app.js      全部交互，无构建、无框架
+│   ├── index.html           单页骨架
+│   ├── style.css            两套主题（B 站粉 #fb7299 作主色）
+│   └── app.js               全部交互，无构建、无框架
+├── contrib/
+│   ├── biliweb.service      systemd 用户服务模板
+│   └── bili                 命令行下载工具
 └── requirements.txt
 ```
 
-想改外观只动 `style.css` 里的 `:root` 变量即可（`--accent` 换成别的颜色整套都跟着变）。
+想改配色只动 `style.css` 顶部两个变量块：`:root` 是深色，`html[data-theme="light"]` 是浅色。
 
 ## 接口
 
 ```
-GET    /api/library                  全量状态（曲目/歌单/收藏/历史/设置/统计）
-POST   /api/resolve   {url}          只解析元数据（含分P列表）
-POST   /api/import    {url,pages}    入库，pages=one|all
-POST   /api/cache     {ids,all}      排入下载队列
-POST   /api/cache/clear {ids}        删本地音频，元数据保留
-GET    /api/stream/{id}              播放（支持 Range，可拖进度）
-GET    /api/cover/{id}               封面
-GET    /api/track/{id}               单曲状态（缓存进度轮询用）
-POST   /api/favorite/{id}            收藏开关
-POST   /api/play/{id}                记一条播放历史
-POST   /api/playlists {name}         建歌单
-POST   /api/playlists/{id}/items     加歌
+GET    /api/library                   全量状态（曲目/歌单/收藏/历史/设置/统计）
+GET    /api/track/{id}                单曲状态（缓存进度轮询）
+POST   /api/resolve    {url}          只解析元数据（含分P列表）
+POST   /api/import     {url,pages}    入库，pages=one|all
+POST   /api/cache      {ids,all}      排入下载队列
+POST   /api/cache/clear{ids}          删本地音频，元数据保留
+GET    /api/stream/{id}               播放（支持 Range）
+GET    /api/cover/{id}                封面
+GET    /api/preview-cover?url=        预览用封面（B 站图床有防盗链）
+POST   /api/favorite/{id}             收藏开关
+POST   /api/play/{id}                 记一条播放历史
+GET    /api/playlists                 歌单列表
+POST   /api/playlists {name}          建歌单
+PATCH  /api/playlists/{id} {name}     重命名
+POST   /api/playlists/{id}/items      加歌
 DELETE /api/playlists/{id}/items/{tid}
-POST   /api/settings  {key,value}
+POST   /api/settings   {key,value}
 ```
 
 ## 常见问题
 
-**「解析失败」/ SSL 报错**：本机 7897 那个代理偶尔会掐 TLS。现在已经把 B 站相关域名
-（bilibili.com / bilivideo.com / hdslb.com / b23.tv …）加进 `no_proxy` 直连，一般不会再遇到。
+**解析失败 / SSL 报错**：B 站整条链路都在国内，翻墙代理只会更慢更容易被掐 TLS。
+代码里已经把 `bilibili.com / bilivideo.com / hdslb.com / biliimg.com / b23.tv` 等域名
+自动加进 `no_proxy` 直连。如果还报错，先确认这台机器能直连 B 站。
 
-**Cookie 有点慢**：第一次从浏览器导 Cookie 要几十秒，之后会缓存成
-`~/.local/share/bili-music/cookies.txt`（6 小时更新一次），所以只有开机后第一次用会慢一下。
-读不出来的时候会自动丢掉 Cookie 再试，不会卡住。
+**「缓存失败」**：多半是这条视频需要登录（会员/付费/年龄限制）。去设置里选上浏览器 Cookie 再试。
 
-**更新 yt-dlp**（B 站接口常变，两三个月更一次）：
+**更新 yt-dlp**：B 站接口常变，两三个月更新一次。
 
 ```bash
-env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY python3 -m pip install --user --break-system-packages -U yt-dlp
-systemctl --user restart biliweb
+# venv 里
+pip install -U yt-dlp
+# 或者 --user 装的
+pip install --user -U yt-dlp
 ```
 
-**8787 被别的服务占了**，所以默认用 8788。
+**端口被占用**：`PORT=9000 python3 app.py`。
 
-**删了歌，文件没删干净？** 从列表里「垃圾桶」删是连文件一起删；「清空音频文件」只删声音、
+**删了歌，文件没删干净？** 列表里的「垃圾桶」是连文件一起删；「清空音频文件」只删声音、
 保留列表，下次播放会重新下。
 
-## 还能往哪长
+**数据库丢了能不能从文件恢复？** 暂时不能——没有扫描媒体目录重建库的功能，见下。
 
-- 歌单内拖拽排序、批量选中
-- B 站收藏夹 / UP 主投稿直接同步过来
-- 歌词抓取、桌面歌词
-- 把队列接到 mpv / MPRIS，用系统媒体键控制（现在只做了 Media Session，浏览器里能用）
+## 已知限制
+
+- 单用户、无鉴权，只监听 `127.0.0.1`。要手机访问得自己加反向代理和密码
+- 没有「只听不存」的试听模式
+- 不能按 UP 主 / B 站收藏夹整包同步（现在是一条条加，分 P 可以整包）
+- 没有歌词、没有均衡器
+- 数据库和媒体目录不联动，删了 db 不会从 m4a 重建
+
+## 免责
+
+仅供个人离线收听。请遵守 B 站用户协议，不要传播下载下来的音视频内容，也不要用于任何商业用途。
+
+## 许可
+
+目前没有加开源许可证，即默认保留所有权利。想要 MIT / Apache-2.0 之类的话，开个 issue 说一声。
