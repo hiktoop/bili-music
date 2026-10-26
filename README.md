@@ -284,4 +284,4 @@ pip install --user -U yt-dlp
 
 ## 许可
 
-目前没有加开源许可证，即默认保留所有权利。想要 MIT / Apache-2.0 之类的话，开个 issue 说一声。
+[MIT](LICENSE) © 2026 hiktoop
