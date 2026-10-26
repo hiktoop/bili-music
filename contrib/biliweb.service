@@ -1,0 +1,14 @@
+[Unit]
+Description=bili 音乐库（本地网页播放器）
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bili-music
+ExecStart=/usr/bin/python3 %h/bili-music/app.py
+Environment=PORT=8788
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

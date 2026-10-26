@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bili♪ 音乐库</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='19' font-size='19'>🎧</text></svg>">
+<script>
+/* 先把主题定下来，避免首屏闪一下白/黑 */
+try{
+  var t = localStorage.getItem('bili-theme');
+  if(!t) t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.dataset.theme = t;
+}catch(e){ document.documentElement.dataset.theme = 'dark'; }
+</script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">♪</div>
+      <div class="brand-txt"><b>bili 音乐库</b><span>本地缓存播放器</span></div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button data-view="library" class="on"><i data-ico="disc"></i><span>音乐库</span></button>
+      <button data-view="favorites"><i data-ico="heart"></i><span>收藏</span></button>
+      <button data-view="cache"><i data-ico="db"></i><span>缓存</span></button>
+      <button data-view="settings"><i data-ico="cog"></i><span>设置</span></button>
+    </nav>
+
+    <div class="side-head">
+      <span>歌单</span>
+      <button id="newPlaylist" title="新建歌单"><i data-ico="plus"></i></button>
+    </div>
+    <ul class="plist" id="playlistNav"></ul>
+
+    <div class="side-foot" id="sideStats"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="search">
+        <i data-ico="search"></i>
+        <input id="search" placeholder="在库里搜歌名 / UP 主" autocomplete="off">
+      </div>
+      <div class="top-right">
+        <button class="icon-btn" id="themeBtn" title="切换浅色 / 深色"><i data-ico="moon"></i></button>
+      </div>
+    </header>
+
+    <div class="addbar" id="addbar">
+      <div class="addbar-row">
+        <i data-ico="link"></i>
+        <input id="addInput" placeholder="粘贴 B 站视频链接或 BV 号，回车直接添加" autocomplete="off" spellcheck="false">
+        <button class="primary" id="addGo">添加</button>
+      </div>
+      <div class="addbar-msg" id="addMsg"></div>
+      <div id="addPreview"></div>
+    </div>
+
+    <section id="view" class="view"></section>
+  </main>
+</div>
+
+<footer class="player" id="player">
+  <div class="np-song">
+    <div class="np-cover" id="npCover"><i data-ico="music"></i></div>
+    <div class="np-meta">
+      <div class="np-title" id="npTitle">还没开始听</div>
+      <div class="np-artist" id="npArtist">在上面粘个 B 站链接吧</div>
+    </div>
+    <button class="icon-btn np-fav" id="npFav" title="收藏"><i data-ico="heart"></i></button>
+  </div>
+
+  <div class="np-mid">
+    <div class="np-btns">
+      <button class="icon-btn" id="btnShuffle" title="随机播放"><i data-ico="shuffle"></i></button>
+      <button class="icon-btn" id="btnPrev" title="上一首"><i data-ico="prev"></i></button>
+      <button class="play-btn" id="btnPlay" title="播放 / 暂停"><i data-ico="play"></i></button>
+      <button class="icon-btn" id="btnNext" title="下一首"><i data-ico="next"></i></button>
+      <button class="icon-btn" id="btnRepeat" title="循环"><i data-ico="repeat"></i></button>
+    </div>
+    <div class="np-bar">
+      <span id="tCur" title="点一下从头播放">0:00</span>
+      <div class="range-wrap">
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+        <div class="range-fill" id="seekFill"></div>
+      </div>
+      <span id="tDur">0:00</span>
+    </div>
+  </div>
+
+  <div class="np-right">
+    <span class="buffer-hint" id="bufferHint"></span>
+    <button class="icon-btn" id="btnMute" title="音量"><i data-ico="vol"></i></button>
+    <input type="range" id="vol" min="0" max="100" value="90" class="vol">
+    <button class="icon-btn" id="btnQueue" title="播放队列"><i data-ico="queue"></i></button>
+  </div>
+</footer>
+
+<aside class="drawer" id="drawer">
+  <header>
+    <b>播放队列</b>
+    <button class="icon-btn" id="drawerClose"><i data-ico="close"></i></button>
+  </header>
+  <div class="drawer-body" id="queueList"></div>
+</aside>
+
+<div class="modal-wrap" id="modalWrap">
+  <div class="modal" id="modal"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<audio id="audio" preload="auto"></audio>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
