@@ -436,6 +436,19 @@ def playlist_remove(pid: int, tid: str) -> None:
     run("DELETE FROM playlist_items WHERE playlist_id=? AND track_id=?", (pid, tid))
 
 
+def playlist_set_order(pid: int, ids: list[str]) -> None:
+    """按给定顺序重排歌单。不在歌单里的忽略，漏传的按原顺序补到末尾。"""
+    rows = q("SELECT track_id FROM playlist_items WHERE playlist_id=? ORDER BY pos", (pid,))
+    current = [r["track_id"] for r in rows]
+    wanted = [i for i in ids if i in current]
+    seen = set(wanted)
+    wanted += [i for i in current if i not in seen]
+    with conn() as c:
+        for pos, tid in enumerate(wanted):
+            c.execute("UPDATE playlist_items SET pos=? WHERE playlist_id=? AND track_id=?",
+                      (pos, pid, tid))
+
+
 def log_play(tid: str) -> None:
     run("INSERT INTO history(track_id, played_at) VALUES(?,?)", (tid, int(time.time())))
 

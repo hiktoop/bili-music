@@ -32,6 +32,7 @@ const P = {
   reset: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v6h6"/>',
   moon: '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/>',
+  grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.5.6l2.6-2.6a5 5 0 0 0-7-7L11.5 5.6"/><path d="M14 11a5 5 0 0 0-7.5-.6L3.9 13a5 5 0 0 0 7 7l1.5-1.5"/>',
 };
 function icon(name, cls = '') {
@@ -91,6 +92,7 @@ const state = {
   repeat: saved.repeat || 'off',
   volume: Number.isFinite(saved.volume) ? saved.volume : 0.9,
   positions: (saved.positions && typeof saved.positions === 'object') ? saved.positions : {},
+  dragging: false,
 };
 function save() {
   // 每首歌听到哪儿了，只留最近 400 条，别把 localStorage 塞爆
@@ -137,6 +139,7 @@ function boot() {
   });
 
   $('#view').addEventListener('click', onViewClick);
+  $('#view').addEventListener('pointerdown', onDragStart);
   $('#drawer').addEventListener('click', onQueueClick);
 
   // 播放器
@@ -224,6 +227,7 @@ async function refresh(silent = false) {
   state.byId = new Map(lib.tracks.map((t) => [t.id, t]));
   state.fav = new Set(lib.favorites);
   if (state.view === 'playlist' && !lib.playlists.some((p) => p.id === state.pid)) state.view = 'library';
+  if (state.dragging) return;          // 拖动过程中重建 DOM 会把手里的行弄丢
   render(silent ? scroll : null);
 }
 
@@ -283,7 +287,12 @@ function statusBadge(t) {
 function trackRow(t, i, opts = {}) {
   const cur = t.id === state.currentId;
   return `<div class="tr ${cur ? 'playing' : ''}" data-id="${esc(t.id)}">
-    <div class="tr-idx"><span class="num">${i + 1}</span><span class="playico">${icon('play')}</span></div>
+    <div class="tr-idx">
+      <span class="num">${i + 1}</span>
+      ${opts.inPlaylist && opts.draggable
+        ? `<span class="tr-handle" title="拖动排序" data-drag="${esc(t.id)}">${icon('grip')}</span>`
+        : `<span class="playico">${icon('play')}</span>`}
+    </div>
     <div class="tr-main" data-act="play">
       <div class="tr-cover">${t.cover ? `<img src="/api/cover/${encodeURIComponent(t.id)}" loading="lazy" alt="">` : icon('music')}</div>
       <div class="tr-txt">
@@ -430,6 +439,7 @@ function viewPlaylist() {
     ${first && first.cover ? '' : ''}
     ${trackList(list, {
       inPlaylist: true,
+      draggable: !state.filter,
       emptyTitle: '歌单还是空的',
       emptyHint: '在任意曲目上点「＋」就能加进来。',
     })}`;
@@ -437,6 +447,7 @@ function viewPlaylist() {
 
 /* ---------------- 视图交互 ---------------- */
 async function onViewClick(e) {
+  if (e.target.closest('.tr-handle, .handle')) return;
   const actEl = e.target.closest('[data-act]');
   const row = e.target.closest('.tr');
   const card = e.target.closest('.card[data-id]');
@@ -551,6 +562,76 @@ async function toggleFav(id) {
     renderMain(); paintControls();
     toast(r.fav ? '已收藏' : '已取消收藏');
   } catch (err) { toast(err.message, true); }
+}
+
+/* ---------------- 歌单拖拽排序 ---------------- */
+let drag = null;
+
+function onDragStart(e) {
+  const handle = e.target.closest('.tr-handle');
+  if (!handle) return;
+  const row = handle.closest('.tr');
+  const list = row && row.parentElement;
+  if (!row || !list || state.view !== 'playlist') return;
+
+  e.preventDefault();
+  drag = { row, list, pid: state.pid, moved: false };
+  state.dragging = true;
+  row.classList.add('dragging');
+  try { handle.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实 pointerId */ }
+  document.addEventListener('pointermove', onDragMove);
+  document.addEventListener('pointerup', onDragEnd, { once: true });
+  document.addEventListener('pointercancel', onDragEnd, { once: true });
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  const { row, list } = drag;
+  drag.moved = true;
+  const y = e.clientY;
+  const others = Array.from(list.querySelectorAll('.tr:not(.dragging)'));
+  let placed = false;
+
+  for (const r of others) {
+    const b = r.getBoundingClientRect();
+    if (y >= b.top && y <= b.bottom) {
+      if (y < b.top + b.height / 2) list.insertBefore(row, r);
+      else list.insertBefore(row, r.nextSibling);
+      placed = true;
+      break;
+    }
+  }
+  if (!placed && others.length) {
+    const first = others[0].getBoundingClientRect();
+    const last = others[others.length - 1].getBoundingClientRect();
+    if (y < first.top) list.insertBefore(row, others[0]);
+    else if (y > last.bottom) list.appendChild(row);
+  }
+
+  // 拖到上下边缘时自动滚动
+  const v = $('#view');
+  const vb = v.getBoundingClientRect();
+  if (y < vb.top + 56) v.scrollTop -= 14;
+  else if (y > vb.bottom - 56) v.scrollTop += 14;
+}
+
+async function onDragEnd() {
+  if (!drag) return;
+  const { row, list, pid, moved } = drag;
+  document.removeEventListener('pointermove', onDragMove);
+  row.classList.remove('dragging');
+  drag = null;
+  state.dragging = false;
+  if (!moved) return;
+
+  const ids = Array.from(list.querySelectorAll('.tr')).map((r) => r.dataset.id);
+  try {
+    await api(`/api/playlists/${pid}/order`, { track_ids: ids }, 'PATCH');
+    toast('顺序已保存');
+  } catch (err) {
+    toast(err.message, true);
+  }
+  refresh(true);
 }
 
 /* ---------------- 播放 ---------------- */

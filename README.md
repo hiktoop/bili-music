@@ -17,7 +17,7 @@
 - **缓存优先**：点一首没下过的，自动排队下载并显示进度，下完立刻播；之后切歌、拖进度都是零延迟
 - **自动预缓存下一首**，连着听的时候只会等第一次
 - **续播**：每 2 秒记一次进度，关掉页面/重启电脑再打开，队列和「上次听到 25:00」都还在
-- 歌单、收藏、播放历史、搜索过滤、播放队列
+- 歌单（拖拽排序）、收藏、播放历史、搜索过滤、播放队列
 - 分 P 视频可以只加当前这 P，也能一次把整个合集加进来
 - 封面、标题、UP 主都写进文件标签，拷到手机/车机也不丢
 - 深色 / 浅色主题，跟随系统，也可以手动切
@@ -241,6 +241,7 @@ POST   /api/play/{id}                 记一条播放历史
 GET    /api/playlists                 歌单列表
 POST   /api/playlists {name}          建歌单
 PATCH  /api/playlists/{id} {name}     重命名
+PATCH  /api/playlists/{id}/order       重排 {track_ids:[...]}
 POST   /api/playlists/{id}/items      加歌
 DELETE /api/playlists/{id}/items/{tid}
 POST   /api/settings   {key,value}

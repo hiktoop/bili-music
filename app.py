@@ -67,6 +67,10 @@ class PlaylistItemIn(BaseModel):
     track_id: str
 
 
+class OrderIn(BaseModel):
+    track_ids: list[str]
+
+
 class SettingIn(BaseModel):
     key: str
     value: str
@@ -177,6 +181,12 @@ def api_playlist_add(pid: int, body: PlaylistItemIn):
 def api_playlist_remove(pid: int, tid: str):
     catalog.playlist_remove(pid, tid)
     return {"ok": True}
+
+
+@app.patch("/api/playlists/{pid}/order")
+def api_playlist_order(pid: int, body: OrderIn):
+    catalog.playlist_set_order(pid, body.track_ids)
+    return {"ok": True, "count": len(body.track_ids)}
 
 
 # ------------------------------------------------------------ 设置

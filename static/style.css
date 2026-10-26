@@ -294,6 +294,13 @@ button.ghost svg{width:15px;height:15px}
 .tr:hover .tr-idx .num{display:none}
 .tr-idx .playico{display:none;color:var(--txt)}
 .tr:hover .tr-idx .playico{display:block;margin:0 auto}
+.tr-idx .tr-handle{
+  display:none;place-items:center;width:100%;height:26px;color:var(--dim2);
+  cursor:grab;touch-action:none;
+}
+.tr:hover .tr-idx .tr-handle{display:grid}
+.tr-idx .tr-handle:active{cursor:grabbing;color:var(--txt)}
+.tr.dragging{opacity:.55;background:var(--panel2);box-shadow:0 10px 26px -16px var(--shadow)}
 .tr-main{display:flex;align-items:center;gap:11px;min-width:0;cursor:pointer}
 .tr-cover{
   width:40px;height:40px;border-radius:8px;overflow:hidden;flex:none;
