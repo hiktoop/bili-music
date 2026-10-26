@@ -564,7 +564,10 @@ async function toggleFav(id) {
   } catch (err) { toast(err.message, true); }
 }
 
-/* ---------------- 歌单拖拽排序 ---------------- */
+/* ---------------- 歌单拖拽排序 ----------------
+ * 拖动时把整行“提”成一个浮动影子跟着指针走，
+ * 其余用 FLIP 平滑让位，落点用一个虚线槽位表示。
+ */
 let drag = null;
 
 function onDragStart(e) {
@@ -575,10 +578,30 @@ function onDragStart(e) {
   if (!row || !list || state.view !== 'playlist') return;
 
   e.preventDefault();
-  drag = { row, list, pid: state.pid, moved: false };
+  const rect = row.getBoundingClientRect();
+
+  // 影子：原行的一份克隆，脱离文档流跟着指针
+  const ghost = row.cloneNode(true);
+  ghost.classList.remove('drag-placeholder');
+  ghost.classList.add('drag-ghost');
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  ghost.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0) scale(1.015)`;
+  document.body.appendChild(ghost);
+
+  drag = {
+    row, list, pid: state.pid, ghost,
+    grabY: e.clientY - rect.top,      // 指针在行内的相对位置
+    left: rect.left,
+    y: e.clientY,
+    moved: false,
+  };
+
   state.dragging = true;
-  row.classList.add('dragging');
+  row.classList.add('drag-placeholder');   // 原位留一个槽
+  document.body.classList.add('dragging');
   try { handle.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实 pointerId */ }
+
   document.addEventListener('pointermove', onDragMove);
   document.addEventListener('pointerup', onDragEnd, { once: true });
   document.addEventListener('pointercancel', onDragEnd, { once: true });
@@ -586,52 +609,106 @@ function onDragStart(e) {
 
 function onDragMove(e) {
   if (!drag) return;
-  const { row, list } = drag;
   drag.moved = true;
-  const y = e.clientY;
-  const others = Array.from(list.querySelectorAll('.tr:not(.dragging)'));
-  let placed = false;
+  drag.y = e.clientY;
+  drag.ghost.style.transform =
+    `translate3d(${drag.left}px, ${e.clientY - drag.grabY}px, 0) scale(1.015)`;
+  moveSlot(e.clientY);
+  autoScroll(e.clientY);
+}
 
+/* FLIP：先量旧位置，改 DOM，再用反向位移 + 过渡滑到新位置 */
+function flip(mutate) {
+  const { list, row } = drag;
+  const rows = Array.from(list.querySelectorAll('.tr'));
+  const before = new Map(rows.map((r) => [r, r.getBoundingClientRect().top]));
+
+  mutate();
+
+  for (const r of rows) {
+    if (r === row) continue;                  // 槽位本身不参与动画
+    const dy = before.get(r) - r.getBoundingClientRect().top;
+    if (!dy) continue;
+    r.style.transition = 'none';
+    r.style.transform = `translateY(${dy}px)`;
+    void r.offsetHeight;                      // 强制回流，让起点生效
+    r.style.transition = 'transform .22s cubic-bezier(.22,.85,.3,1)';
+    r.style.transform = '';
+  }
+}
+
+function moveSlot(y) {
+  const { row, list } = drag;
+  const others = Array.from(list.querySelectorAll('.tr:not(.drag-placeholder)'));
+  if (!others.length) return;
+
+  let target = null;
+  let before = false;
   for (const r of others) {
     const b = r.getBoundingClientRect();
-    if (y >= b.top && y <= b.bottom) {
-      if (y < b.top + b.height / 2) list.insertBefore(row, r);
-      else list.insertBefore(row, r.nextSibling);
-      placed = true;
-      break;
-    }
+    if (y >= b.top && y <= b.bottom) { target = r; before = y < b.top + b.height / 2; break; }
   }
-  if (!placed && others.length) {
+  if (!target) {
     const first = others[0].getBoundingClientRect();
     const last = others[others.length - 1].getBoundingClientRect();
-    if (y < first.top) list.insertBefore(row, others[0]);
-    else if (y > last.bottom) list.appendChild(row);
+    if (y < first.top) { target = others[0]; before = true; }
+    else if (y > last.bottom) { target = others[others.length - 1]; before = false; }
   }
+  if (!target) return;
 
-  // 拖到上下边缘时自动滚动
+  const next = before ? target : target.nextElementSibling;
+  if (next === row) return;                   // 位置没变，别白动
+  flip(() => list.insertBefore(row, next));
+}
+
+function autoScroll(y) {
   const v = $('#view');
-  const vb = v.getBoundingClientRect();
-  if (y < vb.top + 56) v.scrollTop -= 14;
-  else if (y > vb.bottom - 56) v.scrollTop += 14;
+  const b = v.getBoundingClientRect();
+  if (y < b.top + 56) v.scrollTop -= 14;
+  else if (y > b.bottom - 56) v.scrollTop += 14;
 }
 
 async function onDragEnd() {
   if (!drag) return;
-  const { row, list, pid, moved } = drag;
+  const { row, list, pid, ghost, moved } = drag;
   document.removeEventListener('pointermove', onDragMove);
-  row.classList.remove('dragging');
+  document.body.classList.remove('dragging');
+
+  // 影子滑回槽位再淡出，视觉上像“放下去”
+  const slot = row.getBoundingClientRect();
+  ghost.style.transition = 'transform .16s ease, opacity .16s ease';
+  ghost.style.transform = `translate3d(${slot.left}px, ${slot.top}px, 0) scale(1)`;
+  ghost.style.opacity = '0';
+  setTimeout(() => ghost.remove(), 200);
+
+  row.classList.remove('drag-placeholder');
   drag = null;
   state.dragging = false;
+
   if (!moved) return;
 
   const ids = Array.from(list.querySelectorAll('.tr')).map((r) => r.dataset.id);
   try {
     await api(`/api/playlists/${pid}/order`, { track_ids: ids }, 'PATCH');
-    toast('顺序已保存');
+    applyLocalOrder(pid, ids);          // 本地已经是对的，不用再整表重绘
+    renumber();                         // 但序号要跟着改
   } catch (err) {
     toast(err.message, true);
+    refresh(true);
   }
-  refresh(true);
+}
+
+function renumber() {
+  Array.from(document.querySelectorAll('#view .tr')).forEach((r, i) => {
+    const n = r.querySelector('.tr-idx .num');
+    if (n) n.textContent = i + 1;
+  });
+}
+
+function applyLocalOrder(pid, ids) {
+  if (!state.lib) return;
+  const others = state.lib.items.filter((i) => i.playlist_id !== pid);
+  state.lib.items = others.concat(ids.map((track_id) => ({ playlist_id: pid, track_id })));
 }
 
 /* ---------------- 播放 ---------------- */

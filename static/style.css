@@ -300,7 +300,26 @@ button.ghost svg{width:15px;height:15px}
 }
 .tr:hover .tr-idx .tr-handle{display:grid}
 .tr-idx .tr-handle:active{cursor:grabbing;color:var(--txt)}
-.tr.dragging{opacity:.55;background:var(--panel2);box-shadow:0 10px 26px -16px var(--shadow)}
+.tr.drag-placeholder{
+  background:var(--tint);
+  outline:1px dashed rgba(251,114,153,.6);
+  outline-offset:-1px;
+}
+.tr.drag-placeholder > *{visibility:hidden}
+.drag-ghost{
+  position:fixed;left:0;top:0;z-index:70;pointer-events:none;
+  background:var(--panel2);
+  border:1px solid var(--line2);
+  box-shadow:0 20px 44px -20px rgba(0,0,0,.6);
+  opacity:.97;
+  will-change:transform;
+}
+body.dragging{cursor:grabbing;user-select:none}
+body.dragging .tr:hover{background:transparent}
+@media (prefers-reduced-motion: reduce){
+  .tr,.drag-ghost{transition:none !important}
+}
+body.dragging .drag-ghost .tr-idx .tr-handle{display:grid;color:var(--txt)}
 .tr-main{display:flex;align-items:center;gap:11px;min-width:0;cursor:pointer}
 .tr-cover{
   width:40px;height:40px;border-radius:8px;overflow:hidden;flex:none;
