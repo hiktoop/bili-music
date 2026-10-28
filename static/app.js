@@ -1088,9 +1088,18 @@ function paintControls() {
   rb.innerHTML = icon(state.repeat === 'one' ? 'repeat1' : 'repeat');
   rb.classList.toggle('on', state.repeat !== 'off');
   $('#btnMute').innerHTML = icon(audio.muted || state.volume === 0 ? 'mute' : 'vol');
-  $('#vol').value = Math.round((audio.muted ? 0 : state.volume) * 100);
+  paintVolume();
   $('#npFav').classList.toggle('faved', state.fav.has(state.currentId));
   paintProgress();
+}
+
+function paintVolume() {
+  const v = audio.muted ? 0 : Math.round(state.volume * 100);
+  const el = $('#vol');
+  el.value = v;
+  el.style.setProperty('--p', `${v}%`);
+  el.title = `音量 ${v}%`;
+  $('#btnMute').title = audio.muted ? '取消静音' : '静音';
 }
 
 function paintProgress() {

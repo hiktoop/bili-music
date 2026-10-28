@@ -475,13 +475,26 @@ input[type=range]::-webkit-slider-thumb{
 .range-wrap:hover input[type=range]::-webkit-slider-thumb{opacity:1}
 .np-right{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 .buffer-hint{font-size:11px;color:var(--warn);margin-right:4px;white-space:nowrap}
+/* 音量条：和进度条同一套观感（已填充部分用主色） */
 input.vol{
-  -webkit-appearance:none;appearance:none;width:74px;height:4px;border-radius:3px;
-  background:var(--track);cursor:pointer;
+  -webkit-appearance:none;appearance:none;width:88px;height:16px;
+  cursor:pointer;background:none;border:0;padding:0;
+  --p: 90%;
+  background-image:linear-gradient(to right,
+    var(--accent) 0 var(--p), var(--track) var(--p) 100%);
+  background-size:100% 4px;background-position:center;background-repeat:no-repeat;
 }
 input.vol::-webkit-slider-thumb{
-  -webkit-appearance:none;width:10px;height:10px;border-radius:50%;
-  background:var(--knob2);border:1px solid var(--thumb-line);
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:var(--accent);border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.14), 0 2px 6px rgba(0,0,0,.18);
+  opacity:1;                    /* 全局那条是 opacity:0（进度条悬停才显示），这里必须显式覆盖 */
+  transition:transform .12s;
+}
+input.vol:hover::-webkit-slider-thumb{transform:scale(1.15)}
+input.vol::-moz-range-thumb{
+  width:13px;height:13px;border-radius:50%;border:2px solid #fff;
+  background:var(--accent);
 }
 
 /* ---------------- 抽屉 / 弹窗 / 提示 ---------------- */
