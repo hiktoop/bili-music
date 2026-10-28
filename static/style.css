@@ -232,7 +232,7 @@ button.ghost svg{width:15px;height:15px}
 .addprev .ap-end{display:flex;align-items:center;gap:6px;flex:none}
 
 .view{
-  flex:1;overflow-y:auto;padding:22px 26px 34px;scroll-behavior:smooth;
+  flex:1;overflow-y:auto;padding:22px 26px 34px;
   background:radial-gradient(900px 420px at 18% -12%,rgba(251,114,153,.055),transparent 62%);
   transition:background .18s;
 }
@@ -424,6 +424,13 @@ select:focus,.input:focus{border-color:var(--focus-line)}
 .switch.on{background:rgba(251,114,153,.3)}
 .switch.on::after{left:21px;background:var(--accent)}
 
+/* 从别处跳回正在播放时闪一下 */
+@keyframes rowFlash{
+  0%{background:rgba(251,114,153,.34);box-shadow:inset 0 0 0 1px rgba(251,114,153,.45)}
+  100%{background:transparent;box-shadow:inset 0 0 0 1px transparent}
+}
+.tr.flash{animation:rowFlash 1.5s ease-out}
+
 /* ---------------- 播放器 ---------------- */
 .player{
   position:fixed;left:0;right:0;bottom:0;height:var(--player-h);
@@ -433,7 +440,10 @@ select:focus,.input:focus{border-color:var(--focus-line)}
   border-top:1px solid var(--line);z-index:40;
   transition:background .18s,border-color .18s;
 }
-.np-song{display:flex;align-items:center;gap:12px;min-width:0}
+.np-song{display:flex;align-items:center;gap:12px;min-width:0;cursor:pointer;border-radius:10px;padding:2px 6px 2px 2px;margin-left:-2px;transition:background .15s}
+.np-song:hover{background:var(--hover)}
+.np-song:hover .np-title{color:var(--accent-txt)}
+.np-title{transition:color .15s}
 .np-cover{
   width:54px;height:54px;border-radius:9px;overflow:hidden;flex:none;
   background:linear-gradient(160deg,var(--ph1),var(--ph2));

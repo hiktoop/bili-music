@@ -88,6 +88,8 @@ const state = {
   colById: new Map(),
   filter: '',
   queue: Array.isArray(saved.queue) ? saved.queue : [],
+  queueFrom: saved.queueFrom || null,      // 队列是从哪个视图点起来的
+  locateNext: false,
   qi: Number.isFinite(saved.qi) ? saved.qi : 0,
   currentId: saved.currentId || null,
   shuffle: !!saved.shuffle,
@@ -113,7 +115,7 @@ function save() {
   localStorage.setItem(LS, JSON.stringify({
     queue: state.queue, qi: state.qi, currentId: state.currentId,
     shuffle: state.shuffle, repeat: state.repeat, volume: state.volume,
-    resume: state.resume,
+    resume: state.resume, queueFrom: state.queueFrom,
   }));
 }
 
@@ -157,6 +159,7 @@ function boot() {
     if (!li) return;
     state.view = 'playlist';
     state.pid = Number(li.dataset.pid);
+    state.locateNext = true;
     render();
   });
 
@@ -176,6 +179,10 @@ function boot() {
   $('#btnQueue').addEventListener('click', () => $('#drawer').classList.toggle('open'));
   $('#drawerClose').addEventListener('click', () => $('#drawer').classList.remove('open'));
   $('#npFav').addEventListener('click', () => state.currentId && toggleFav(state.currentId));
+  $('.np-song').addEventListener('click', (e) => {
+    if (e.target.closest('#npFav')) return;
+    jumpToCurrent();
+  });
 
   $('#seek').addEventListener('input', (e) => {
     if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration;
@@ -286,6 +293,12 @@ function render(keepScroll) {
   paintControls();
   renderQueue();
   if (keepScroll != null) $('#view').scrollTop = keepScroll;
+  if (state.locateNext) {
+    state.locateNext = false;
+    const el = document.querySelector(`.tr[data-id="${CSS.escape(state.currentId || '')}"]`);
+    // 不用 requestAnimationFrame：后台标签页里 rAF 会被暂停，滚动就不会发生
+    if (el) scrollToRow(el, keepScroll == null);
+  }
 }
 
 /* ---------------- 侧栏 ---------------- */
@@ -586,6 +599,7 @@ async function onViewClick(e) {
     state.collectionId = gcard.dataset.cid;
     state.filter = '';
     $('#search').value = '';
+    state.locateNext = true;
     render();
     return;
   }
@@ -886,6 +900,10 @@ function playList(ids, startId) {
   const i = Math.max(0, ids.indexOf(startId));
   state.queue = ids;
   state.qi = i;
+  state.queueFrom = {
+    view: state.view,
+    id: state.view === 'playlist' ? state.pid : (state.view === 'collection' ? state.collectionId : null),
+  };
   save();
   renderQueue();
   playCurrent();
@@ -1067,12 +1085,62 @@ function restoreCurrent() {
 
 function paintSavedProgress() { paintProgress(); }
 
+/* ---------------- 回到正在播放 ---------------- */
+
+/* 当前这首属于哪个视图 */
+function currentOrigin() {
+  const tid = state.currentId;
+  const t = state.byId.get(tid);
+  if (!tid) return null;
+  const from = state.queueFrom;
+  if (from && viewHasTrack(from.view, from.id, tid)) return from;
+  if (t && t.collection_id) return { view: 'collection', id: t.collection_id };
+  if (state.fav.has(tid)) return { view: 'favorites', id: null };
+  return t && !t.collection_id ? { view: 'singles', id: null } : { view: 'library', id: null };
+}
+
+function viewHasTrack(view, id, tid) {
+  if (!state.lib || !tid) return false;
+  if (view === 'collection') return (state.byId.get(tid) || {}).collection_id === id;
+  if (view === 'playlist') return state.lib.items.some((i) => i.playlist_id === id && i.track_id === tid);
+  if (view === 'favorites') return state.fav.has(tid);
+  if (view === 'singles') return !(state.byId.get(tid) || {}).collection_id;
+  if (view === 'library') return true;
+  return false;
+}
+
+/* 跳到当前播放曲目所在的页面，并把它滚到视野中间 */
+function jumpToCurrent() {
+  if (!state.currentId) return toast('还没开始播放');
+  const o = currentOrigin();
+  if (!o) return;
+  state.view = o.view;
+  if (o.view === 'collection') state.collectionId = o.id;
+  if (o.view === 'playlist') state.pid = o.id;
+  state.filter = '';
+  $('#search').value = '';
+  state.locateNext = true;
+  render();
+}
+
+function scrollToRow(el) {
+  if (!el) return;
+  const v = $('#view');
+  const r = el.getBoundingClientRect();
+  const vr = v.getBoundingClientRect();
+  const top = v.scrollTop + (r.top - vr.top) - vr.height / 2 + r.height / 2;
+  v.scrollTop = Math.max(0, top);   // 直接赋值：animation 在后台标签会被挂起
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1500);
+}
+
 /* ---------------- 播放器绘制 ---------------- */
 function paintNowPlaying() {
   const t = state.byId.get(state.currentId);
   if (!t) return;
   $('#npTitle').textContent = t.title;
-  $('#npArtist').textContent = t.uploader || '未知 UP';
+  const col = t.collection_id ? state.colById.get(t.collection_id) : null;
+  $('#npArtist').textContent = [t.uploader || '未知 UP', col ? col.title : ''].filter(Boolean).join(' · ');
   $('#npCover').innerHTML = t.cover
     ? `<img src="/api/cover/${encodeURIComponent(t.id)}" alt="">`
     : icon('music');
