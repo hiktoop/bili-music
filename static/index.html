@@ -13,7 +13,7 @@ try{
   document.documentElement.dataset.theme = t;
 }catch(e){ document.documentElement.dataset.theme = 'dark'; }
 </script>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 
@@ -25,7 +25,9 @@ try{
     </div>
 
     <nav class="nav" id="nav">
-      <button data-view="library" class="on"><i data-ico="disc"></i><span>音乐库</span></button>
+      <button data-view="library" class="on"><i data-ico="disc"></i><span>全部</span></button>
+      <button data-view="singles"><i data-ico="music"></i><span>单曲</span></button>
+      <button data-view="collections"><i data-ico="folder"></i><span>音乐库</span></button>
       <button data-view="favorites"><i data-ico="heart"></i><span>收藏</span></button>
       <button data-view="cache"><i data-ico="db"></i><span>缓存</span></button>
       <button data-view="settings"><i data-ico="cog"></i><span>设置</span></button>
@@ -116,6 +118,6 @@ try{
 <div class="toast" id="toast"></div>
 <audio id="audio" preload="auto"></audio>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

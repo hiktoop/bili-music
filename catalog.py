@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS tracks (
     err        TEXT,
     added_at   INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS collections (
+    id         TEXT PRIMARY KEY,      -- 用 BV 号
+    title      TEXT,
+    uploader   TEXT,
+    cover      TEXT,
+    created_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS favorites (
     track_id  TEXT PRIMARY KEY,
     added_at  INTEGER
@@ -99,6 +106,9 @@ def conn() -> sqlite3.Connection:
 def init_db() -> None:
     with conn() as c:
         c.executescript(SCHEMA)
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(tracks)")]
+        if "collection_id" not in cols:
+            c.execute("ALTER TABLE tracks ADD COLUMN collection_id TEXT")
 
 
 def q(sql: str, args: tuple = ()) -> list[dict]:
@@ -395,15 +405,17 @@ def resolve(url: str) -> dict:
 
 def upsert_track(*, tid: str, bvid: str, page: int, title: str, uploader: str,
                  duration: int, url: str, cover_url: str | None,
-                 added_at: int | None = None) -> None:
+                 added_at: int | None = None, collection_id: str | None = None) -> None:
     exists = one("SELECT id FROM tracks WHERE id=?", (tid,))
     if exists:
-        run("UPDATE tracks SET title=?, uploader=?, duration=?, url=? WHERE id=?",
-            (title, uploader, duration, url, tid))
+        run("""UPDATE tracks SET title=?, uploader=?, duration=?, url=?,
+               collection_id=COALESCE(?, collection_id) WHERE id=?""",
+            (title, uploader, duration, url, collection_id, tid))
         return
-    run("""INSERT INTO tracks(id,bvid,page,title,uploader,duration,url,status,added_at)
-           VALUES(?,?,?,?,?,?,?,'none',?)""",
-        (tid, bvid, page, title, uploader, duration, url, added_at or int(time.time())))
+    run("""INSERT INTO tracks(id,bvid,page,title,uploader,duration,url,status,added_at,collection_id)
+           VALUES(?,?,?,?,?,?,?,'none',?,?)""",
+        (tid, bvid, page, title, uploader, duration, url,
+         added_at or int(time.time()), collection_id))
     if cover_url:
         _save_cover(tid, cover_url)
 
@@ -418,15 +430,17 @@ def fetch_image(url: str) -> tuple[bytes, str]:
     return data, mt
 
 
-def _save_cover(tid: str, url: str) -> None:
-    """封面统一转成 jpg 存本地，按 URL 去重（一个合集 150 首只存一张图）。"""
+def _cover_name(url: str) -> str:
+    return f"c{hashlib.md5(url.encode()).hexdigest()[:16]}.jpg"
+
+
+def _ensure_cover(url: str) -> str | None:
+    """确保封面文件存在，返回文件名。按 URL 去重，一个合集只存一张图。"""
     if not url:
-        return
-    name = f"c{hashlib.md5(url.encode()).hexdigest()[:16]}.jpg"
-    dest = COVERS / name
+        return None
+    dest = COVERS / _cover_name(url)
     if dest.exists():
-        run("UPDATE tracks SET cover=? WHERE id=?", (name, tid))
-        return
+        return dest.name
     tmp = None
     try:
         req = urllib.request.Request(url, headers={
@@ -441,12 +455,63 @@ def _save_cover(tid: str, url: str) -> None:
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp,
                         "-q:v", "3", "-vf", "scale=480:-1", str(dest)],
                        check=True, timeout=60)
-        run("UPDATE tracks SET cover=? WHERE id=?", (name, tid))
     except Exception:
-        pass
+        return None
     finally:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
+    return dest.name if dest.exists() else None
+
+
+def _save_cover(tid: str, url: str) -> None:
+    name = _ensure_cover(url)
+    if name:
+        run("UPDATE tracks SET cover=? WHERE id=?", (name, tid))
+
+
+def upsert_collection(cid: str, title: str, uploader: str, cover_url: str | None) -> None:
+    cover = _ensure_cover(cover_url) if cover_url else None
+    row = one("SELECT id FROM collections WHERE id=?", (cid,))
+    if row:
+        run("UPDATE collections SET title=?, uploader=?, cover=COALESCE(?, cover) WHERE id=?",
+            (title, uploader, cover, cid))
+    else:
+        run("INSERT INTO collections(id,title,uploader,cover,created_at) VALUES(?,?,?,?,?)",
+            (cid, title, uploader, cover, int(time.time())))
+
+
+def delete_collection(cid: str, with_files: bool = True) -> int:
+    ids = [r["id"] for r in q("SELECT id FROM tracks WHERE collection_id=?", (cid,))]
+    for tid in ids:
+        delete_track(tid, with_file=with_files)
+    run("DELETE FROM collections WHERE id=?", (cid,))
+    return len(ids)
+
+
+def backfill_collections() -> int:
+    """把老数据里"来自同一条多P视频"的曲目补成合集（以前没有这个概念）。"""
+    rows = q("""
+        SELECT bvid, COUNT(*) AS n FROM tracks
+        WHERE bvid IS NOT NULL AND bvid <> ''
+          AND (collection_id IS NULL OR collection_id = '')
+        GROUP BY bvid HAVING n > 1
+    """)
+    for r in rows:
+        bvid = r["bvid"]
+        try:
+            v = _resolve_public(f"https://www.bilibili.com/video/{bvid}", 1)
+        except Exception:
+            v = None
+        upsert_collection(
+            bvid,
+            (v or {}).get("title") or bvid,
+            (v or {}).get("uploader") or "",
+            (v or {}).get("cover"),
+        )
+        run("""UPDATE tracks SET collection_id=?
+               WHERE bvid=? AND (collection_id IS NULL OR collection_id='')""",
+            (bvid, bvid))
+    return len(rows)
 
 
 def add_from_url(url: str, pages: str = "one") -> list[str]:
@@ -458,6 +523,12 @@ def add_from_url(url: str, pages: str = "one") -> list[str]:
         picked = [p for p in parts if p["page"] == want] or parts[:1]
         parts = picked
 
+    # 多P视频：整条链接下的所有曲目归到同一个音乐库（合集）
+    cid = v["bvid"] if (v.get("is_multi") and v.get("bvid")) else None
+    if cid:
+        upsert_collection(cid, v.get("title") or cid, v.get("uploader") or "",
+                          v.get("cover"))
+
     batch_ts = int(time.time())
     ids = []
     for p in parts:
@@ -466,7 +537,7 @@ def add_from_url(url: str, pages: str = "one") -> list[str]:
         upsert_track(tid=tid, bvid=v["bvid"], page=p["page"], title=p["title"],
                      uploader=v["uploader"], duration=p["duration"],
                      url=surl, cover_url=p.get("cover") or v.get("cover"),
-                     added_at=batch_ts)
+                     added_at=batch_ts, collection_id=cid)
         ids.append(tid)
     return ids
 
@@ -758,9 +829,20 @@ def library() -> dict:
         SELECT track_id, MAX(played_at) AS at FROM history
         GROUP BY track_id ORDER BY at DESC LIMIT 24
     """)
+    collections = q("""
+        SELECT c.*, COUNT(t.id) AS count,
+               COALESCE(SUM(t.duration), 0) AS duration,
+               SUM(CASE WHEN t.status='ready' THEN 1 ELSE 0 END) AS cached
+        FROM collections c LEFT JOIN tracks t ON t.collection_id = c.id
+        GROUP BY c.id ORDER BY c.created_at DESC
+    """)
+    for c in collections:
+        c["cover"] = bool(c.get("cover") and (COVERS / c["cover"]).exists())
+
     cached = [t for t in tracks if t["status"] == "ready"]
     return {
         "tracks": tracks,
+        "collections": collections,
         "favorites": favs,
         "playlists": playlists,
         "items": items,

@@ -28,6 +28,7 @@ async def lifespan(_app):
     catalog.init_db()
     catalog.start_workers(2)
     threading.Thread(target=catalog.warm_cookies, daemon=True).start()
+    threading.Thread(target=catalog.backfill_collections, daemon=True).start()
     yield
 
 
@@ -110,6 +111,12 @@ def api_import(body: ImportIn):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"添加失败：{_short(e)}") from e
+
+
+@app.delete("/api/collections/{cid}")
+def api_delete_collection(cid: str):
+    n = catalog.delete_collection(cid)
+    return {"deleted": n, "library": catalog.library()}
 
 
 @app.delete("/api/tracks/{tid}")
@@ -201,6 +208,7 @@ def api_setting(body: SettingIn):
         except OSError:
             pass
         threading.Thread(target=catalog.warm_cookies, daemon=True).start()
+    threading.Thread(target=catalog.backfill_collections, daemon=True).start()
     return catalog.get_settings()
 
 
@@ -223,6 +231,8 @@ def api_stream(tid: str):
 @app.get("/api/cover/{tid}")
 def api_cover(tid: str):
     row = catalog.one("SELECT cover FROM tracks WHERE id=?", (tid,))
+    if not (row and row.get("cover")):
+        row = catalog.one("SELECT cover FROM collections WHERE id=?", (tid,))
     if row and row.get("cover"):
         p = catalog.COVERS / row["cover"]
         if p.exists():
@@ -251,7 +261,16 @@ def api_preview_cover(url: str):
 
 # ------------------------------------------------------------ 前端
 
-app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+class NoCacheStatic(StaticFiles):
+    """本地服务，静态文件永远回源校验，改完刷新就生效。"""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", NoCacheStatic(directory=str(STATIC)), name="static")
 
 
 @app.get("/")

@@ -84,6 +84,8 @@ const state = {
   fav: new Set(),
   view: 'library',
   pid: null,
+  collectionId: null,
+  colById: new Map(),
   filter: '',
   queue: Array.isArray(saved.queue) ? saved.queue : [],
   qi: Number.isFinite(saved.qi) ? saved.qi : 0,
@@ -227,6 +229,7 @@ async function refresh(silent = false) {
   state.lib = lib;
   state.byId = new Map(lib.tracks.map((t) => [t.id, t]));
   state.fav = new Set(lib.favorites);
+  state.colById = new Map((lib.collections || []).map((c) => [c.id, c]));
   if (state.view === 'playlist' && !lib.playlists.some((p) => p.id === state.pid)) state.view = 'library';
   if (state.dragging) return;          // 拖动过程中重建 DOM 会把手里的行弄丢
 
@@ -253,7 +256,7 @@ function patchBadges() {
 }
 
 function render(keepScroll) {
-  $('#addbar').classList.toggle('hide', state.view !== 'library');
+  $('#addbar').classList.toggle('hide', !['library', 'singles', 'collections'].includes(state.view));
   renderSide();
   renderMain();
   paintControls();
@@ -264,7 +267,7 @@ function render(keepScroll) {
 /* ---------------- 侧栏 ---------------- */
 function renderSide() {
   $$('#nav button').forEach((b) => {
-    b.classList.toggle('on', state.view === (b.dataset.view === 'playlist' ? '' : b.dataset.view));
+    b.classList.toggle('on', b.dataset.view === state.view);
   });
   const lib = state.lib;
   if (!lib) return;
@@ -273,7 +276,8 @@ function renderSide() {
       <span class="n">${esc(p.name)}</span><span class="c">${p.count}</span>
     </li>`).join('');
   $('#sideStats').innerHTML = `
-    ${lib.stats.count} 首 · 已缓存 ${lib.stats.cached} 首<br>
+    ${lib.stats.count} 首 · ${(lib.collections || []).length} 个音乐库<br>
+    已缓存 ${lib.stats.cached} 首 ·
     ${fsize(lib.stats.size)}${lib.stats.downloading ? ` · 队列 ${lib.stats.downloading}` : ''}`;
 }
 
@@ -283,6 +287,9 @@ function renderMain() {
   if (!state.lib) { v.innerHTML = `<div class="empty">正在读取音乐库…</div>`; return; }
   const map = {
     library: viewLibrary,
+    singles: viewSingles,
+    collections: viewCollections,
+    collection: viewCollection,
     favorites: viewFavorites,
     cache: viewCache,
     settings: viewSettings,
@@ -307,6 +314,9 @@ function statusBadge(t) {
 
 function trackRow(t, i, opts = {}) {
   const cur = t.id === state.currentId;
+  const col = t.collection_id ? state.colById.get(t.collection_id) : null;
+  const sub = [t.uploader || '未知 UP', (col && !opts.hideCollection) ? col.title : '']
+    .filter(Boolean).join(' · ');
   return `<div class="tr ${cur ? 'playing' : ''}" data-id="${esc(t.id)}">
     <div class="tr-idx">
       <span class="num">${i + 1}</span>
@@ -318,7 +328,7 @@ function trackRow(t, i, opts = {}) {
       <div class="tr-cover">${t.cover ? `<img src="/api/cover/${encodeURIComponent(t.id)}" loading="lazy" alt="">` : icon('music')}</div>
       <div class="tr-txt">
         <div class="tr-title" title="${esc(t.title)}">${esc(t.title)}</div>
-        <div class="tr-artist">${esc(t.uploader || '未知 UP')}</div>
+        <div class="tr-artist" title="${esc(sub)}">${esc(sub)}</div>
       </div>
     </div>
     <div class="tr-badge">${statusBadge(t)}</div>
@@ -364,7 +374,7 @@ function viewLibrary() {
   const list = filtered(all);
   const s = state.lib.stats;
   return `<div class="view-h">
-      <h1>音乐库</h1>
+      <h1>全部</h1>
       <div class="sub">${all.length} 首 · 本地 ${s.cached} 首 · ${fsize(s.size)}</div>
       <div class="grow"></div>
       <button class="ghost" data-act="cacheall">${icon('down')}缓存未缓存的</button>
@@ -373,6 +383,74 @@ function viewLibrary() {
     ${state.filter ? '' : recentCards()}
     ${all.length ? '' : ''}
     ${trackList(list, { emptyTitle: state.filter ? '没找到' : '音乐库是空的' })}`;
+}
+
+function viewSingles() {
+  const singles = state.lib.tracks.filter((t) => !t.collection_id);
+  const list = filtered(singles);
+  return `<div class="view-h">
+      <h1>单曲</h1>
+      <div class="sub">${singles.length} 首不属于任何音乐库</div><div class="grow"></div>
+      ${list.length ? `<button class="ghost" data-act="playall" data-ids="singles">${icon('play')}播放全部</button>` : ''}
+    </div>
+    ${trackList(list, {
+      emptyTitle: state.filter ? '没找到' : '还没有单曲',
+      emptyHint: '单 P 视频加进来就是单曲；多 P 的会归到一个音乐库。',
+    })}`;
+}
+
+function viewCollections() {
+  const cols = (state.lib.collections || []).filter((c) => {
+    if (!state.filter) return true;
+    return `${c.title} ${c.uploader || ''}`.toLowerCase().includes(state.filter);
+  });
+  if (!cols.length) {
+    return `<div class="view-h"><h1>音乐库</h1>
+        <div class="sub">多 P 视频会自动归到这里</div></div>
+      <div class="empty"><div class="big">♪</div>
+        <b>${state.filter ? '没找到' : '还没有音乐库'}</b>
+        <div class="hint">粘一个多 P 的合集链接，整条链接下的所有曲目会自动归成同一个音乐库。</div>
+      </div>`;
+  }
+  return `<div class="view-h">
+      <h1>音乐库</h1>
+      <div class="sub">${cols.length} 个合集 · ${cols.reduce((a, c) => a + c.count, 0)} 首</div>
+    </div>
+    <div class="grid">
+      ${cols.map((c) => `<div class="gcard" data-cid="${esc(c.id)}">
+        <div class="cv">
+          ${c.cover ? `<img src="/api/cover/${encodeURIComponent(c.id)}" loading="lazy" alt="">` : icon('folder')}
+          <span class="go">${icon('play')}</span>
+        </div>
+        <div class="t">${esc(c.title)}</div>
+        <div class="s">${esc(c.uploader || '')} · ${c.count} 首 · ${fmt(c.duration)}</div>
+      </div>`).join('')}
+    </div>`;
+}
+
+function viewCollection() {
+  const c = state.colById.get(state.collectionId);
+  if (!c) return `<div class="empty">这个音乐库不在了</div>`;
+  const ids = state.lib.tracks
+    .filter((t) => t.collection_id === c.id)
+    .sort((a, b) => (a.page || 0) - (b.page || 0));
+  const list = filtered(ids);
+  return `<div class="coll-head">
+      <div class="coll-cover">
+        ${c.cover ? `<img src="/api/cover/${encodeURIComponent(c.id)}" alt="">` : icon('folder')}
+      </div>
+      <div class="coll-info">
+        <div class="crumb">音乐库</div>
+        <h1>${esc(c.title)}</h1>
+        <div class="sub">${esc(c.uploader || '')} · ${ids.length} 首 · ${fmt(c.duration)}${c.cached ? ` · 已缓存 ${c.cached} 首` : ''}</div>
+        <div class="coll-acts">
+          ${ids.length ? `<button class="primary" data-act="playall" data-ids="col">${icon('play')}播放全部</button>` : ''}
+          <button class="ghost" data-act="cachecol">${icon('down')}缓存整个库</button>
+          <button class="ghost" data-act="delcol">${icon('trash')}删除音乐库</button>
+        </div>
+      </div>
+    </div>
+    ${trackList(list, { hideCollection: true, emptyTitle: '这个音乐库里没有曲目' })}`;
 }
 
 function viewFavorites() {
@@ -472,19 +550,53 @@ async function onViewClick(e) {
   const actEl = e.target.closest('[data-act]');
   const row = e.target.closest('.tr');
   const card = e.target.closest('.card[data-id]');
+  const gcard = e.target.closest('.gcard[data-cid]');
   const act = actEl ? actEl.dataset.act : null;
 
   // 卡片 → 播放
   if (card && !act) { playList([...state.lib.recent], card.dataset.id); return; }
+
+  // 音乐库卡片 → 进合集
+  if (gcard && !act) {
+    state.view = 'collection';
+    state.collectionId = gcard.dataset.cid;
+    state.filter = '';
+    $('#search').value = '';
+    render();
+    return;
+  }
 
   if (act === 'playall') {
     const scope = actEl.dataset.ids;
     let ids = [];
     if (scope === 'fav') ids = state.lib.tracks.filter((t) => state.fav.has(t.id)).map((t) => t.id);
     else if (scope === 'pl') ids = state.lib.items.filter((i) => i.playlist_id === state.pid).map((i) => i.track_id);
+    else if (scope === 'singles') ids = state.lib.tracks.filter((t) => !t.collection_id).map((t) => t.id);
+    else if (scope === 'col') ids = collectionTracks();
     else ids = state.lib.tracks.map((t) => t.id);
     if (!ids.length) return toast('没有可播的曲子');
     playList(ids, ids[0]);
+    return;
+  }
+  if (act === 'cachecol') {
+    const ids = collectionTracks().filter((id) => state.byId.get(id)?.status !== 'ready');
+    if (!ids.length) return toast('这个库已经都在本地了');
+    try {
+      const r = await api('/api/cache', { ids });
+      toast(`已排入 ${r.queued.length} 首`);
+      refresh();
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+  if (act === 'delcol') {
+    const c = state.colById.get(state.collectionId);
+    confirmModal('删除音乐库', `「${c ? c.title : ''}」和其中所有曲目、本地文件都会被删掉。`, async () => {
+      await api(`/api/collections/${encodeURIComponent(state.collectionId)}`, null, 'DELETE');
+      state.view = 'collections';
+      state.collectionId = null;
+      await refresh();
+      toast('已删除');
+    });
     return;
   }
   if (act === 'cacheall') {
@@ -574,6 +686,14 @@ $('#view') && document.addEventListener('change', async (e) => {
     toast('已保存');
   } catch (err) { toast(err.message, true); }
 });
+
+function collectionTracks() {
+  if (!state.collectionId) return [];
+  return state.lib.tracks
+    .filter((t) => t.collection_id === state.collectionId)
+    .sort((a, b) => (a.page || 0) - (b.page || 0))
+    .map((t) => t.id);
+}
 
 async function toggleFav(id) {
   try {
