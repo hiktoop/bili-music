@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -140,6 +141,79 @@ def set_setting(key: str, value: str) -> None:
 
 # ---------------------------------------------------------------- 链接解析
 
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+_VIEW_API = "https://api.bilibili.com/x/web-interface/view"
+
+
+def _api_json(url: str, params: dict | None = None) -> dict:
+    from urllib.parse import urlencode
+    qs = ("?" + urlencode(params)) if params else ""
+    req = urllib.request.Request(url + qs, headers={
+        "User-Agent": _UA,
+        "Referer": "https://www.bilibili.com/",
+    })
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _resolve_public(base: str, page: int) -> dict | None:
+    """普通投稿走 B 站公开接口：一次请求拿全所有分P，150P 也只要 0.2 秒。
+
+    拿不到（番剧、需要登录、接口变了）就返回 None，让调用方退回 yt-dlp。
+    """
+    m = re.search(r"/video/(BV[0-9A-Za-z]{10})", base)
+    m2 = re.search(r"/video/av(\d+)", base, re.I)
+    params = {"bvid": m.group(1)} if m else ({"aid": m2.group(1)} if m2 else None)
+    if not params:
+        return None
+
+    try:
+        payload = _api_json(_VIEW_API, params)
+    except Exception:
+        return None
+    if payload.get("code") != 0 or not payload.get("data"):
+        return None
+
+    d = payload["data"]
+    pages = d.get("pages") or []
+    if not pages:
+        return None
+
+    multi = len(pages) > 1
+    bvid = d.get("bvid") or (m.group(1) if m else "")
+    cover = d.get("pic")
+    parts = []
+    for i, pg in enumerate(pages):
+        pno = int(pg.get("page") or i + 1)
+        if multi:
+            # 分P用每集自己的名字，标题才看得见是什么歌
+            title = (pg.get("part") or "").strip() or f"P{pno}"
+            tid = f"{bvid}_p{pno}"
+        else:
+            title = d.get("title") or ""
+            tid = bvid
+        parts.append({
+            "id": tid,
+            "page": pno,
+            "title": title,
+            "duration": int(pg.get("duration") or 0),
+            "cover": cover,
+        })
+
+    return {
+        "bvid": bvid,
+        "title": d.get("title") or "",
+        "uploader": ((d.get("owner") or {}).get("name")) or "",
+        "duration": int(d.get("duration") or 0),
+        "cover": cover,
+        "parts": parts,
+        "is_multi": multi,
+        "page": page if page <= len(parts) else 1,
+        "url": f"https://www.bilibili.com/video/{bvid}",
+    }
+
+
 BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})")
 AV_RE = re.compile(r"av(\d+)", re.I)
 
@@ -253,8 +327,13 @@ def _run_ydl(opts: dict, fn):
 def resolve(url: str) -> dict:
     """只取元数据，不下载。返回视频信息和所有分P。"""
     base, page = normalize(url)
-    # 多P视频只有当 noplaylist=False 时才会把每一 P 都列出来
-    info = _run_ydl(_ydl_opts(skip_download=True, noplaylist=False),
+
+    fast = _resolve_public(base, page)
+    if fast:
+        return fast
+
+    # 退回 yt-dlp：用 flat 模式，避免它对每个分P重新完整解析一遍（150P 能跑十几分钟）
+    info = _run_ydl(_ydl_opts(skip_download=True, noplaylist=False, extract_flat=True),
                     lambda y: y.extract_info(base, download=False))
 
     if not info:
@@ -268,7 +347,10 @@ def resolve(url: str) -> dict:
         for idx, e in enumerate(entries, 1):
             if not e:
                 continue
+            # flat 模式下 entry 只有 url，分P号得从 url 里抠
             m = re.search(r"_p(\d+)$", str(e.get("id") or ""))
+            if not m:
+                m = re.search(r"[?&]p=(\d+)", str(e.get("url") or ""))
             pg = int(m.group(1)) if m else int(e.get("playlist_index") or e.get("page") or idx)
             parts.append({
                 "id": e.get("id") or f"{info.get('id')}_p{pg}",
@@ -312,7 +394,8 @@ def resolve(url: str) -> dict:
 # ---------------------------------------------------------------- 曲目
 
 def upsert_track(*, tid: str, bvid: str, page: int, title: str, uploader: str,
-                 duration: int, url: str, cover_url: str | None) -> None:
+                 duration: int, url: str, cover_url: str | None,
+                 added_at: int | None = None) -> None:
     exists = one("SELECT id FROM tracks WHERE id=?", (tid,))
     if exists:
         run("UPDATE tracks SET title=?, uploader=?, duration=?, url=? WHERE id=?",
@@ -320,7 +403,7 @@ def upsert_track(*, tid: str, bvid: str, page: int, title: str, uploader: str,
         return
     run("""INSERT INTO tracks(id,bvid,page,title,uploader,duration,url,status,added_at)
            VALUES(?,?,?,?,?,?,?,'none',?)""",
-        (tid, bvid, page, title, uploader, duration, url, int(time.time())))
+        (tid, bvid, page, title, uploader, duration, url, added_at or int(time.time())))
     if cover_url:
         _save_cover(tid, cover_url)
 
@@ -336,11 +419,13 @@ def fetch_image(url: str) -> tuple[bytes, str]:
 
 
 def _save_cover(tid: str, url: str) -> None:
-    """封面统一转成 jpg 存本地，这样离线也有图。"""
+    """封面统一转成 jpg 存本地，按 URL 去重（一个合集 150 首只存一张图）。"""
     if not url:
         return
-    dest = COVERS / f"{tid}.jpg"
+    name = f"c{hashlib.md5(url.encode()).hexdigest()[:16]}.jpg"
+    dest = COVERS / name
     if dest.exists():
+        run("UPDATE tracks SET cover=? WHERE id=?", (name, tid))
         return
     tmp = None
     try:
@@ -356,7 +441,7 @@ def _save_cover(tid: str, url: str) -> None:
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp,
                         "-q:v", "3", "-vf", "scale=480:-1", str(dest)],
                        check=True, timeout=60)
-        run("UPDATE tracks SET cover=? WHERE id=?", (dest.name, tid))
+        run("UPDATE tracks SET cover=? WHERE id=?", (name, tid))
     except Exception:
         pass
     finally:
@@ -373,13 +458,15 @@ def add_from_url(url: str, pages: str = "one") -> list[str]:
         picked = [p for p in parts if p["page"] == want] or parts[:1]
         parts = picked
 
+    batch_ts = int(time.time())
     ids = []
     for p in parts:
         tid = p["id"]
         surl = f"{v['url']}?p={p['page']}"
         upsert_track(tid=tid, bvid=v["bvid"], page=p["page"], title=p["title"],
                      uploader=v["uploader"], duration=p["duration"],
-                     url=surl, cover_url=p.get("cover") or v.get("cover"))
+                     url=surl, cover_url=p.get("cover") or v.get("cover"),
+                     added_at=batch_ts)
         ids.append(tid)
     return ids
 
@@ -395,9 +482,13 @@ def delete_track(tid: str, with_file: bool = True) -> None:
                     Path(p).unlink()
                 except OSError:
                     pass
-        cv = COVERS / f"{tid}.jpg"
-        if cv.exists():
-            cv.unlink()
+        cv_name = row.get("cover")
+        if cv_name and (COVERS / cv_name).exists():
+            if not one("SELECT 1 FROM tracks WHERE cover=? AND id<>?", (cv_name, tid)):
+                try:
+                    (COVERS / cv_name).unlink()
+                except OSError:
+                    pass
     with conn() as c:
         c.execute("DELETE FROM tracks WHERE id=?", (tid,))
         c.execute("DELETE FROM favorites WHERE track_id=?", (tid,))
@@ -647,7 +738,7 @@ def enqueue(ids: list[str]) -> list[str]:
 def library() -> dict:
     tracks = q("""
         SELECT t.*, (SELECT 1 FROM favorites f WHERE f.track_id=t.id) AS fav
-        FROM tracks t ORDER BY t.added_at DESC, t.title
+        FROM tracks t ORDER BY t.added_at DESC, t.rowid
     """)
     for t in tracks:
         t["cover"] = bool(t.get("cover") and (COVERS / t["cover"]).exists())

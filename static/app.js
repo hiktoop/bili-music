@@ -222,13 +222,34 @@ function boot() {
 /* ---------------- 数据刷新 ---------------- */
 async function refresh(silent = false) {
   const scroll = $('#view').scrollTop;
+  const prevIds = state.lib ? state.lib.tracks.map((t) => t.id).join() : '';
   const lib = await api('/api/library');
   state.lib = lib;
   state.byId = new Map(lib.tracks.map((t) => [t.id, t]));
   state.fav = new Set(lib.favorites);
   if (state.view === 'playlist' && !lib.playlists.some((p) => p.id === state.pid)) state.view = 'library';
   if (state.dragging) return;          // 拖动过程中重建 DOM 会把手里的行弄丢
+
+  // 轮询刷新时，如果曲目集合没变（只是缓存进度在动），就只改徽章，
+  // 否则 150 首的列表每 1.6 秒重建一次，会明显卡
+  const listView = ['library', 'favorites', 'playlist'].includes(state.view);
+  const sameIds = prevIds === lib.tracks.map((t) => t.id).join();
+  if (silent && sameIds && listView) {
+    patchBadges();
+    renderSide();
+    renderQueue();
+    return;
+  }
   render(silent ? scroll : null);
+}
+
+function patchBadges() {
+  for (const t of state.lib.tracks) {
+    const el = document.querySelector(`.tr[data-id="${CSS.escape(t.id)}"] .tr-badge`);
+    if (!el) continue;
+    const html = statusBadge(t);
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
 }
 
 function render(keepScroll) {
@@ -1085,8 +1106,13 @@ async function doImport() {
   paintAddbar();
   try {
     const r = await api('/api/import', { url: add.text, pages: add.pages });
-    toast(`已加入 ${r.added.length} 首，开始缓存`);
-    await api('/api/cache', { ids: r.added });
+    if (r.added.length > 30) {
+      // 一次几百兆的合集不自动下载，让人自己决定
+      toast(`已加入 ${r.added.length} 首（还没缓存，去「缓存」页批量下）`);
+    } else {
+      toast(`已加入 ${r.added.length} 首，开始缓存`);
+      await api('/api/cache', { ids: r.added });
+    }
     add.text = '';
     $('#addInput').value = '';
     clearAddPreview();
