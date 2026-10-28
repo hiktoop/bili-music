@@ -93,19 +93,27 @@ const state = {
   shuffle: !!saved.shuffle,
   repeat: saved.repeat || 'off',
   volume: Number.isFinite(saved.volume) ? saved.volume : 0.9,
-  positions: (saved.positions && typeof saved.positions === 'object') ? saved.positions : {},
+  // 播放进度：每个上下文(某个音乐库 / 单曲区)只记"当前这一首"听到哪儿
+  resume: (saved.resume && typeof saved.resume === 'object') ? saved.resume : migrateResume(saved),
   dragging: false,
 };
+
+/* 老版本是"每首歌各记一份"，迁移时只保留上次那一首 */
+function migrateResume(saved) {
+  const id = saved.currentId;
+  const t = id && saved.positions && Number(saved.positions[id]);
+  if (!id || !t || t < 2) return {};
+  return { default: { id, t } };
+}
 function save() {
-  // 每首歌听到哪儿了，只留最近 400 条，别把 localStorage 塞爆
-  const keys = Object.keys(state.positions);
-  if (keys.length > 400) {
-    keys.slice(0, keys.length - 400).forEach((k) => delete state.positions[k]);
+  const keys = Object.keys(state.resume);
+  if (keys.length > 200) {
+    keys.slice(0, keys.length - 200).forEach((k) => delete state.resume[k]);
   }
   localStorage.setItem(LS, JSON.stringify({
     queue: state.queue, qi: state.qi, currentId: state.currentId,
     shuffle: state.shuffle, repeat: state.repeat, volume: state.volume,
-    positions: state.positions,
+    resume: state.resume,
   }));
 }
 
@@ -168,7 +176,7 @@ function boot() {
   $('#tCur').addEventListener('click', () => {
     if (!audio.src) return;
     audio.currentTime = 0;
-    if (state.currentId) { state.positions[state.currentId] = 0; save(); }
+    if (state.currentId) { delete state.resume[resumeKey(state.currentId)]; save(); }
     paintProgress();
   });
   $('#btnMute').addEventListener('click', () => {
@@ -670,6 +678,9 @@ async function onViewClick(e) {
       await api(`/api/tracks/${encodeURIComponent(id)}`, null, 'DELETE');
       if (state.currentId === id) { audio.pause(); audio.removeAttribute('src'); state.currentId = null; }
       state.queue = state.queue.filter((q) => q !== id);
+      Object.keys(state.resume).forEach((k) => {
+        if (state.resume[k].id === id) delete state.resume[k];
+      });
       save();
       await refresh();
       toast('已删除');
@@ -896,9 +907,16 @@ async function playCurrent() {
   prefetchNext();
 }
 
+/* 进度按上下文存：一个音乐库一个槽，其余（单曲/歌单/全部）共用一个槽 */
+function resumeKey(tid) {
+  const t = state.byId.get(tid);
+  return t && t.collection_id ? `col:${t.collection_id}` : 'default';
+}
+
 /* 把某首接进 audio，并跳回上次听到的地方 */
 function attachSource(id) {
-  const pos = Number(state.positions[id]) || 0;
+  const slot = state.resume[resumeKey(id)];
+  const pos = (slot && slot.id === id) ? Number(slot.t) || 0 : 0;
   const dur = Number(state.byId.get(id)?.duration) || 0;
   audio.src = `/api/stream/${encodeURIComponent(id)}`;
   const seek = () => {
@@ -922,7 +940,7 @@ function rememberPosition(force = false) {
   // 播完 / 快结束时不记，免得下次一点开就跳到结尾
   if (audio.currentTime > audio.duration - 12) return;
   if (audio.currentTime < 2 && !force) return;
-  state.positions[id] = Math.round(audio.currentTime);
+  state.resume[resumeKey(id)] = { id, t: Math.round(audio.currentTime) };
   save();
 }
 
@@ -993,7 +1011,7 @@ function step(dir, auto) {
 }
 
 function onEnded() {
-  if (state.currentId) { delete state.positions[state.currentId]; save(); }
+  if (state.currentId) { delete state.resume[resumeKey(state.currentId)]; save(); }
   if (state.repeat === 'one') { audio.currentTime = 0; audio.play().catch(() => {}); return; }
   if (state.qi + 1 >= state.queue.length && state.repeat === 'off') { stopAtEnd(); return; }
   step(1, true);
@@ -1063,7 +1081,9 @@ function paintProgress() {
   const hasSrc = !!audio.getAttribute('src');
   const t = state.byId.get(state.currentId);
   const d = audio.duration || Number(t && t.duration) || 0;
-  const c = hasSrc ? (audio.currentTime || 0) : (Number(state.positions[state.currentId]) || 0);
+  const slot = state.currentId ? state.resume[resumeKey(state.currentId)] : null;
+  const savedT = (slot && state.currentId && slot.id === state.currentId) ? Number(slot.t) || 0 : 0;
+  const c = hasSrc ? (audio.currentTime || 0) : savedT;
   $('#tCur').textContent = fmt(c);
   $('#tDur').textContent = d ? fmt(d) : '0:00';
   const p = d ? (c / d) * 1000 : 0;
