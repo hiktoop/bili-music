@@ -119,6 +119,18 @@ function save() {
 
 const audio = $('#audio');
 
+/* 同一个 app 开了多个标签页时，只让一个出声：谁开始播，其他标签自动暂停 */
+const TAB_ID = Math.random().toString(36).slice(2);
+const channel = ('BroadcastChannel' in window) ? new BroadcastChannel('bili-music') : null;
+if (channel) {
+  channel.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'playing' && e.data.from !== TAB_ID && !audio.paused) {
+      audio.pause();
+      toast('另一个标签页开始播放了，这个标签已暂停');
+    }
+  });
+}
+
 /* ---------------- 启动 ---------------- */
 function boot() {
   $$('[data-ico]').forEach((el) => { el.outerHTML = icon(el.dataset.ico); });
@@ -186,7 +198,11 @@ function boot() {
 
   audio.addEventListener('timeupdate', onTimeUpdate);
   audio.addEventListener('durationchange', paintProgress);
-  audio.addEventListener('play', () => { paintControls(); markPlaying(); });
+  audio.addEventListener('play', () => {
+    paintControls();
+    markPlaying();
+    try { channel && channel.postMessage({ type: 'playing', from: TAB_ID }); } catch { /* 忽略 */ }
+  });
   audio.addEventListener('pause', () => { paintControls(); rememberPosition(true); });
   audio.addEventListener('ended', onEnded);
   audio.addEventListener('error', () => {
