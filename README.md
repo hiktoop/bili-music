@@ -292,3 +292,7 @@ pip install --user -U yt-dlp
 ## 许可
 
 [MIT](LICENSE) © 2026 hiktoop
+
+---
+
+想改这个项目的话，先看 [AGENT.md](AGENT.md)：里面写了架构决策、代码地图，以及开发时踩过的坑。
