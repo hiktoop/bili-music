@@ -82,7 +82,7 @@ const state = {
   lib: null,
   byId: new Map(),
   fav: new Set(),
-  view: 'library',
+  view: 'collections',
   pid: null,
   collectionId: null,
   colById: new Map(),
@@ -120,6 +120,8 @@ function save() {
 }
 
 const audio = $('#audio');
+const REDUCE = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const EASE = 'cubic-bezier(.22,.85,.3,1)';
 
 /* 同一个 app 开了多个标签页时，只让一个出声：谁开始播，其他标签自动暂停 */
 const TAB_ID = Math.random().toString(36).slice(2);
@@ -252,6 +254,43 @@ function boot() {
   }, 1600);
 }
 
+/* ---------------- 动画 ---------------- */
+let lastViewKey = null;
+
+function viewKey() {
+  return `${state.view}:${state.pid || ''}:${state.collectionId || ''}`;
+}
+
+/* 切换视图时做一次入场；刷新数据不重复播 */
+function enterAnimation() {
+  const key = viewKey();
+  if (key === lastViewKey) return;
+  lastViewKey = key;
+  if (REDUCE) return;
+
+  // 只做位移，不动 opacity：动画万一没跑起来（后台标签页会被挂起），
+  // 内容也只是偏几像素，绝不会变成一片空白
+  const view = $('#view');
+  view.animate(
+    [{ transform: 'translateY(6px)' }, { transform: 'none' }],
+    { duration: 190, easing: EASE },
+  );
+
+  // 卡片 / 曲目依次落位，只处理首屏能看到的那些
+  $$('.gcard', view).slice(0, 8).forEach((el, i) => {
+    el.animate(
+      [{ transform: 'translateY(12px)' }, { transform: 'none' }],
+      { duration: 280, delay: i * 45, easing: EASE, fill: 'backwards' },
+    );
+  });
+  $$('.tr', view).slice(0, 12).forEach((el, i) => {
+    el.animate(
+      [{ transform: 'translateY(7px)' }, { transform: 'none' }],
+      { duration: 240, delay: i * 26, easing: EASE, fill: 'backwards' },
+    );
+  });
+}
+
 /* ---------------- 数据刷新 ---------------- */
 async function refresh(silent = false) {
   const scroll = $('#view').scrollTop;
@@ -261,12 +300,12 @@ async function refresh(silent = false) {
   state.byId = new Map(lib.tracks.map((t) => [t.id, t]));
   state.fav = new Set(lib.favorites);
   state.colById = new Map((lib.collections || []).map((c) => [c.id, c]));
-  if (state.view === 'playlist' && !lib.playlists.some((p) => p.id === state.pid)) state.view = 'library';
+  if (state.view === 'playlist' && !lib.playlists.some((p) => p.id === state.pid)) state.view = 'collections';
   if (state.dragging) return;          // 拖动过程中重建 DOM 会把手里的行弄丢
 
   // 轮询刷新时，如果曲目集合没变（只是缓存进度在动），就只改徽章，
   // 否则 150 首的列表每 1.6 秒重建一次，会明显卡
-  const listView = ['library', 'favorites', 'playlist'].includes(state.view);
+  const listView = ['singles', 'favorites', 'playlist'].includes(state.view);
   const sameIds = prevIds === lib.tracks.map((t) => t.id).join();
   if (silent && sameIds && listView) {
     patchBadges();
@@ -287,7 +326,7 @@ function patchBadges() {
 }
 
 function render(keepScroll) {
-  $('#addbar').classList.toggle('hide', !['library', 'singles', 'collections'].includes(state.view));
+  $('#addbar').classList.toggle('hide', !['singles', 'collections'].includes(state.view));
   renderSide();
   renderMain();
   paintControls();
@@ -299,6 +338,7 @@ function render(keepScroll) {
     // 不用 requestAnimationFrame：后台标签页里 rAF 会被暂停，滚动就不会发生
     if (el) scrollToRow(el, keepScroll == null);
   }
+  enterAnimation();
 }
 
 /* ---------------- 侧栏 ---------------- */
@@ -323,7 +363,6 @@ function renderMain() {
   const v = $('#view');
   if (!state.lib) { v.innerHTML = `<div class="empty">正在读取音乐库…</div>`; return; }
   const map = {
-    library: viewLibrary,
     singles: viewSingles,
     collections: viewCollections,
     collection: viewCollection,
@@ -332,7 +371,7 @@ function renderMain() {
     settings: viewSettings,
     playlist: viewPlaylist,
   };
-  v.innerHTML = (map[state.view] || viewLibrary)();
+  v.innerHTML = (map[state.view] || viewCollections)();
 }
 
 function filtered(list) {
@@ -406,22 +445,6 @@ function recentCards() {
     }).join('')}</div>`;
 }
 
-function viewLibrary() {
-  const all = state.lib.tracks;
-  const list = filtered(all);
-  const s = state.lib.stats;
-  return `<div class="view-h">
-      <h1>全部</h1>
-      <div class="sub">${all.length} 首 · 本地 ${s.cached} 首 · ${fsize(s.size)}</div>
-      <div class="grow"></div>
-      <button class="ghost" data-act="cacheall">${icon('down')}缓存未缓存的</button>
-      <button class="ghost" data-act="playall" data-ids="all">${icon('play')}播放全部</button>
-    </div>
-    ${state.filter ? '' : recentCards()}
-    ${all.length ? '' : ''}
-    ${trackList(list, { emptyTitle: state.filter ? '没找到' : '音乐库是空的' })}`;
-}
-
 function viewSingles() {
   const singles = state.lib.tracks.filter((t) => !t.collection_id);
   const list = filtered(singles);
@@ -432,7 +455,7 @@ function viewSingles() {
     </div>
     ${trackList(list, {
       emptyTitle: state.filter ? '没找到' : '还没有单曲',
-      emptyHint: '单 P 视频加进来就是单曲；多 P 的会归到一个音乐库。',
+      emptyHint: '单 P 视频加进来就是单曲；多 P 的会自动归到一个音乐库。',
     })}`;
 }
 
@@ -442,14 +465,16 @@ function viewCollections() {
     return `${c.title} ${c.uploader || ''}`.toLowerCase().includes(state.filter);
   });
   if (!cols.length) {
-    return `<div class="view-h"><h1>音乐库</h1>
+    return `${state.filter ? '' : recentCards()}
+      <div class="view-h"><h1>音乐库</h1>
         <div class="sub">多 P 视频会自动归到这里</div></div>
       <div class="empty"><div class="big">♪</div>
         <b>${state.filter ? '没找到' : '还没有音乐库'}</b>
         <div class="hint">粘一个多 P 的合集链接，整条链接下的所有曲目会自动归成同一个音乐库。</div>
       </div>`;
   }
-  return `<div class="view-h">
+  return `${state.filter ? '' : recentCards()}
+    <div class="view-h">
       <h1>音乐库</h1>
       <div class="sub">${cols.length} 个合集 · ${cols.reduce((a, c) => a + c.count, 0)} 首</div>
     </div>
@@ -665,7 +690,7 @@ async function onViewClick(e) {
     const pid = Number(actEl.dataset.pid);
     confirmModal('删除歌单', '只删歌单本身，歌还在库里。', async () => {
       await api(`/api/playlists/${pid}`, null, 'DELETE');
-      state.view = 'library'; state.pid = null;
+      state.view = 'collections'; state.pid = null;
       await refresh();
       toast('歌单已删除');
     });
@@ -1096,7 +1121,7 @@ function currentOrigin() {
   if (from && viewHasTrack(from.view, from.id, tid)) return from;
   if (t && t.collection_id) return { view: 'collection', id: t.collection_id };
   if (state.fav.has(tid)) return { view: 'favorites', id: null };
-  return t && !t.collection_id ? { view: 'singles', id: null } : { view: 'library', id: null };
+  return t && !t.collection_id ? { view: 'singles', id: null } : { view: 'collections', id: null };
 }
 
 function viewHasTrack(view, id, tid) {
@@ -1105,7 +1130,6 @@ function viewHasTrack(view, id, tid) {
   if (view === 'playlist') return state.lib.items.some((i) => i.playlist_id === id && i.track_id === tid);
   if (view === 'favorites') return state.fav.has(tid);
   if (view === 'singles') return !(state.byId.get(tid) || {}).collection_id;
-  if (view === 'library') return true;
   return false;
 }
 
@@ -1135,9 +1159,13 @@ function scrollToRow(el) {
 }
 
 /* ---------------- 播放器绘制 ---------------- */
+let lastPaintedId = null;
+
 function paintNowPlaying() {
   const t = state.byId.get(state.currentId);
   if (!t) return;
+  const changed = lastPaintedId !== null && lastPaintedId !== t.id;
+  lastPaintedId = t.id;
   $('#npTitle').textContent = t.title;
   const col = t.collection_id ? state.colById.get(t.collection_id) : null;
   $('#npArtist').textContent = [t.uploader || '未知 UP', col ? col.title : ''].filter(Boolean).join(' · ');
@@ -1146,6 +1174,17 @@ function paintNowPlaying() {
     : icon('music');
   paintControls();
   markPlaying();
+
+  if (changed && !REDUCE) {
+    $('#npCover').animate(
+      [{ transform: 'scale(.92)' }, { transform: 'none' }],
+      { duration: 260, easing: EASE },
+    );
+    $('#npTitle').animate(
+      [{ transform: 'translateY(6px)' }, { transform: 'none' }],
+      { duration: 260, easing: EASE },
+    );
+  }
 }
 
 function paintControls() {

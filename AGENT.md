@@ -55,11 +55,12 @@ contrib/        命令行工具 bili + systemd 模板
 |---|---|
 | `refresh(silent)` | 拉 `/api/library`；**静默刷新只补徽章不重建列表** |
 | `render()` | 侧栏 + 主视图 + 播放器 + 队列；处理 `state.locateNext` |
-| `viewLibrary/Singles/Collections/Collection/Favorites/Cache/Settings/Playlist` | 各视图模板字符串 |
+| `viewSingles/Collections/Collection/Favorites/Cache/Settings/Playlist` | 各视图模板字符串（**没有"全部"页**，首页是音乐库） |
 | `playList/playCurrent/attachSource` | 播放与续播 |
 | `rememberPosition/resumeKey` | 进度按上下文存（关键语义，见下） |
 | `onDragStart/onDragMove/onDragEnd/flip` | 歌单拖拽（Pointer Events + FLIP） |
 | `jumpToCurrent/scrollToRow` | 回到正在播放 |
+| `enterAnimation` | 视图入场动效（只做 transform，见坑表） |
 | `paintVolume/paintControls/paintProgress` | 播放器绘制 |
 
 ---
@@ -124,6 +125,7 @@ B 站的音频轨就是 AAC/fMP4。转 mp3 只会更差、更慢、更占空间�
 | 两个标签页同时放歌 | 同一个 app 开了两个窗口 | `BroadcastChannel` 协调，后播的让先播的暂停 |
 | 添加弹窗里出现两个"取消/关闭" | 预览 html 又加了一个 footer | 结构上只保留一个 footer |
 | 拖拽把手事件收不到 | 模板里 class 写成了 `handle`，选择器找的是 `.tr-handle` | 命名统一 |
+| 切页后整页空白（偶发） | 入场动画用 `opacity:0` 作起点，后台标签页里动画被挂起，就一直透明 | 动画只做 `transform`，不动 opacity；即使不跑也只是偏几像素 |
 
 ---
 
@@ -134,6 +136,7 @@ B 站的音频轨就是 AAC/fMP4。转 mp3 只会更差、更慢、更占空间�
 - 前端改完把 `static/index.html` 里的 `?v=N` 加一（防止某些缓存场景）。
 - 不把 `media/`、`covers/`、`library.db`、`cookies.txt` 提交进仓库（`.gitignore` 已挡）。
 - 新增视图：`state.view` 加值 → `renderMain()` 的 map 里注册 → 侧栏加按钮（`data-view`）。
+- 加动画优先用 `transform`；**不要**拿 `opacity:0` 当起点（后台标签页会挂起动画，内容就永远看不见）。
 - 新增表/字段：`SCHEMA` 里加，并在 `init_db()` 里写 `ALTER TABLE` 兼容老库。
 - 下载相关的改动要保证幂等：失败重试不能产生重复行、重复文件。
 

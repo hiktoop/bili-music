@@ -259,6 +259,8 @@ button.ghost svg{width:15px;height:15px}
 .cardrow::-webkit-scrollbar{height:6px}
 .card{width:132px;cursor:pointer;transition:.15s}
 .card:hover{transform:translateY(-2px)}
+.card .cv img{transition:transform .45s cubic-bezier(.2,.8,.3,1)}
+.card:hover .cv img{transform:scale(1.045)}
 .card .cv{
   width:132px;height:132px;border-radius:10px;overflow:hidden;position:relative;
   background:linear-gradient(160deg,var(--ph1),var(--ph2));
@@ -282,6 +284,8 @@ button.ghost svg{width:15px;height:15px}
 }
 .gcard{cursor:pointer;transition:transform .15s}
 .gcard:hover{transform:translateY(-2px)}
+.gcard .cv img{transition:transform .45s cubic-bezier(.2,.8,.3,1)}
+.gcard:hover .cv img{transform:scale(1.045)}
 .gcard .cv{
   width:100%;aspect-ratio:1/1;border-radius:12px;overflow:hidden;position:relative;
   background:linear-gradient(160deg,var(--ph1),var(--ph2));
@@ -356,7 +360,8 @@ button.ghost svg{width:15px;height:15px}
 body.dragging{cursor:grabbing;user-select:none}
 body.dragging .tr:hover{background:transparent}
 @media (prefers-reduced-motion: reduce){
-  .tr,.drag-ghost{transition:none !important}
+  .tr,.drag-ghost,.gcard,.card,.gcard .cv img,.card .cv img,.icon-btn,.play-btn{transition:none !important}
+  .tr.flash{animation:none !important}
 }
 body.dragging .drag-ghost .tr-idx .tr-handle{display:grid;color:var(--txt)}
 .tr-main{display:flex;align-items:center;gap:11px;min-width:0;cursor:pointer}
@@ -381,8 +386,9 @@ body.dragging .drag-ghost .tr-idx .tr-handle{display:grid;color:var(--txt)}
 .tr:hover .tr-acts,.tr.playing .tr-acts{opacity:1}
 .icon-btn{
   width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--dim);
-  transition:.13s;flex:none;
+  transition:background .13s,color .13s,transform .1s;flex:none;
 }
+.icon-btn:active{transform:scale(.9)}
 .icon-btn:hover{background:var(--hover2);color:var(--txt)}
 .icon-btn.on{color:var(--accent-txt)}
 .icon-btn.faved{color:var(--accent-txt)}
@@ -461,6 +467,7 @@ select:focus,.input:focus{border-color:var(--focus-line)}
   box-shadow:0 6px 16px -8px var(--accent);
 }
 .play-btn:hover{filter:brightness(1.08);transform:scale(1.04)}
+.play-btn:active{transform:scale(.96)}
 .play-btn svg{width:17px;height:17px}
 .np-bar{display:flex;align-items:center;gap:10px;width:100%;max-width:520px}
 .np-bar span{font-size:11px;color:var(--dim2);font-variant-numeric:tabular-nums;min-width:34px;text-align:center}
